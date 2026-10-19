@@ -17,8 +17,8 @@ def test_fragment_files_match_the_builder():
 
 
 def test_fragments_share_names_and_frames():
-    hardware = _load("openarm-bimanual.json")["fragment"]
-    fake = _load("openarm-bimanual-fake.json")["fragment"]
+    hardware = _load("openarm-bimanual.json")
+    fake = _load("openarm-bimanual-fake.json")
     hardware_components = {component["name"]: component for component in hardware["components"]}
     fake_components = {component["name"]: component for component in fake["components"]}
     assert set(hardware_components) == set(fake_components)
@@ -36,7 +36,9 @@ def test_fragments_share_names_and_frames():
         assert hardware_components[name]["frame"] == fake_components[name]["frame"]
 
     assert hardware["services"] == fake["services"]
-    assert hardware["services"][0]["type"] == "motion"
+    assert hardware["services"][0]["api"] == "rdk:service:motion"
+    assert hardware_components["body"]["api"] == "rdk:component:camera"
+    assert "type" not in hardware_components["right-arm"]
     assert "can_interface" not in fake_components["right-arm"]["attributes"]
     assert hardware_components["right-arm"]["attributes"]["can_interface"] == "can0"
     assert hardware_components["left-arm"]["attributes"]["can_interface"] == "can1"

@@ -101,28 +101,33 @@ def bimanual_fragment(*, fake: bool) -> dict:
                 ),
             )
         )
+    # This object is the fragment config itself. The Viam builder reads
+    # top-level components with an api field and does not look inside a wrapper.
     return {
-        "name": "openarm-bimanual-fake" if fake else "openarm-bimanual",
-        "fragment": {
-            "modules": [
-                {
-                    "name": "openarm",
-                    "type": "registry",
-                    "module_id": "viam-labs:openarm-2",
-                    "version": "latest",
-                }
-            ],
-            "components": components,
-            "services": [
-                {
-                    "name": "builtin",
-                    "namespace": "rdk",
-                    "type": "motion",
-                    "model": "rdk:builtin:builtin",
-                }
-            ],
-        },
+        "modules": [
+            {
+                "name": "openarm",
+                "type": "registry",
+                "module_id": "viam-labs:openarm-2",
+                "version": "latest",
+            }
+        ],
+        "components": components,
+        "services": [
+            {
+                "name": "builtin",
+                "api": "rdk:service:motion",
+                "model": "rdk:builtin:builtin",
+            }
+        ],
     }
+
+
+_APIS = {
+    "arm": "rdk:component:arm",
+    "camera": "rdk:component:camera",
+    "gripper": "rdk:component:gripper",
+}
 
 
 def _component(
@@ -136,8 +141,7 @@ def _component(
 ) -> dict:
     component = {
         "name": name,
-        "namespace": "rdk",
-        "type": subtype,
+        "api": _APIS[subtype],
         "model": model,
         "attributes": attributes or {},
         "depends_on": depends_on or [],

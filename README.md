@@ -47,6 +47,8 @@ The gripper uses motor `0x08` on the arm's CAN interface, so the arm and gripper
 
 `fragments/openarm-bimanual.json` is the hardware cell. `fragments/openarm-bimanual-fake.json` is the same component names and frames with the fake arm and gripper models. A motion client can keep using `right-arm` and `left-arm` when you switch fragments.
 
+Each file is the fragment config. In the Viam fragment JSON editor, replace the document with the whole file. The builder lists a block only when `components` is at the top level and each component has an `api`.
+
 ```text
 world
 ├── body
