@@ -32,8 +32,8 @@
         },
         "geometry": {
           "type": "box",
-          "x": 250,
-          "y": 200,
+          "x": 200,
+          "y": 250,
           "z": 740,
           "translation": {
             "x": 0,
@@ -52,8 +52,8 @@
       "frame": {
         "parent": "body",
         "translation": {
-          "x": 120.0,
-          "y": 0.0,
+          "x": -0.0,
+          "y": 120.0,
           "z": 820.0
         },
         "orientation": {
@@ -62,19 +62,14 @@
             "x": 0,
             "y": 1,
             "z": 0,
-            "th": -40
+            "th": -90
           }
         },
         "geometry": {
           "type": "box",
-          "x": 145,
-          "y": 55,
-          "z": 50,
-          "translation": {
-            "x": 0,
-            "y": 0,
-            "z": -25
-          }
+          "x": 125,
+          "y": 31,
+          "z": 27
         }
       }
     },
@@ -89,17 +84,17 @@
       "frame": {
         "parent": "body",
         "translation": {
-          "x": 0.0,
-          "y": -30.0,
+          "x": 30.0,
+          "y": 0.0,
           "z": 697.0
         },
         "orientation": {
-          "type": "ov_degrees",
+          "type": "quaternion",
           "value": {
+            "w": 0.7071067811865476,
             "x": 0,
             "y": 0,
-            "z": 1,
-            "th": 0
+            "z": 0.7071067811865476
           }
         }
       }
@@ -126,9 +121,9 @@
         "orientation": {
           "type": "euler_angles",
           "value": {
-            "roll": 180,
-            "pitch": 90,
-            "yaw": 180
+            "roll": 3.141592653589793,
+            "pitch": 1.5707963267948966,
+            "yaw": 3.141592653589793
           }
         }
       }
@@ -174,17 +169,17 @@
       "frame": {
         "parent": "body",
         "translation": {
-          "x": 0.0,
-          "y": 30.0,
+          "x": -30.0,
+          "y": 0.0,
           "z": 697.0
         },
         "orientation": {
-          "type": "ov_degrees",
+          "type": "quaternion",
           "value": {
+            "w": 0.7071067811865476,
             "x": 0,
             "y": 0,
-            "z": 1,
-            "th": 0
+            "z": 0.7071067811865476
           }
         }
       }
@@ -211,9 +206,9 @@
         "orientation": {
           "type": "euler_angles",
           "value": {
-            "roll": 180,
-            "pitch": 90,
-            "yaw": 180
+            "roll": 3.141592653589793,
+            "pitch": 1.5707963267948966,
+            "yaw": 3.141592653589793
           }
         }
       }

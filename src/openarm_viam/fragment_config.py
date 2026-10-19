@@ -7,19 +7,33 @@ motion client can be tested without a robot.
 
 from __future__ import annotations
 
+import math
+
 from openarm_viam.description import gripper_tcp_mm, head_stereo_mm, mount_mm
 
 _IDENTITY = {"type": "ov_degrees", "value": {"x": 0, "y": 0, "z": 1, "th": 0}}
-_GRASP_ORIENTATION = {"type": "euler_angles", "value": {"roll": 180, "pitch": 90, "yaw": 180}}
-# Starting tilt from the commented zed_front_mount_point. Calibrate on hardware.
-_HEAD_ORIENTATION = {"type": "ov_degrees", "value": {"x": 0, "y": 1, "z": 0, "th": -40}}
+# URDF rpy is radians: pi, pi/2, pi. euler_angles in a fragment are radians too.
+_GRASP_ORIENTATION = {
+    "type": "euler_angles",
+    "value": {"roll": math.pi, "pitch": math.pi / 2, "yaw": math.pi},
+}
+# The description uses +X forward and +Y left. Viam uses +Y forward, +Z up, and +X right.
+# Quaternion for a +90 degree yaw. A bare 90 under euler_angles is 90 radians.
+_HALF_TURN = math.sqrt(2) / 2
+_ARM_ORIENTATION = {
+    "type": "quaternion",
+    "value": {"w": _HALF_TURN, "x": 0, "y": 0, "z": _HALF_TURN},
+}
+# Description camera_link +X looks forward. The optical frame looks along body +Y,
+# with image right along body +X and image down along -Z.
+_HEAD_ORIENTATION = {"type": "ov_degrees", "value": {"x": 0, "y": 1, "z": 0, "th": -90}}
 
 
 def bimanual_fragment(*, fake: bool) -> dict:
     arm_model = "viam-labs:openarm-2:fake-arm" if fake else "viam-labs:openarm-2:arm"
     gripper_model = "viam-labs:openarm-2:fake-gripper" if fake else "viam-labs:openarm-2:gripper"
     tcp = _xyz(gripper_tcp_mm())
-    head = _xyz(head_stereo_mm())
+    head = _viam_xyz(head_stereo_mm())
     components = [
         _component(
             "body",
@@ -30,8 +44,8 @@ def bimanual_fragment(*, fake: bool) -> dict:
                 {"x": 0, "y": 0, "z": 0},
                 geometry={
                     "type": "box",
-                    "x": 250,
-                    "y": 200,
+                    "x": 200,
+                    "y": 250,
                     "z": 740,
                     "translation": {"x": 0, "y": 0, "z": 370},
                 },
@@ -45,12 +59,12 @@ def bimanual_fragment(*, fake: bool) -> dict:
                 "body",
                 head,
                 orientation=_HEAD_ORIENTATION,
+                # ZED Mini outline in the optical frame: X across the image, Y down, Z out.
                 geometry={
                     "type": "box",
-                    "x": 145,
-                    "y": 55,
-                    "z": 50,
-                    "translation": {"x": 0, "y": 0, "z": -25},
+                    "x": 125,
+                    "y": 31,
+                    "z": 27,
                 },
             ),
         ),
@@ -76,7 +90,7 @@ def bimanual_fragment(*, fake: bool) -> dict:
                 "arm",
                 arm_model,
                 attributes=arm_attributes,
-                frame=_frame("body", _xyz(mount_mm(side))),
+                frame=_frame("body", _viam_xyz(mount_mm(side)), orientation=_ARM_ORIENTATION),
             )
         )
         components.append(
@@ -170,3 +184,13 @@ def _frame(
 
 def _xyz(values: tuple[float, float, float]) -> dict:
     return {"x": values[0], "y": values[1], "z": values[2]}
+
+
+def _viam_xyz(openarm_mm: tuple[float, float, float]) -> dict:
+    """Map a description pose into the Viam body frame.
+
+    The description is +X forward and +Y left. Viam is +Y forward and +X right.
+    """
+
+    forward, left, up = openarm_mm
+    return {"x": -left, "y": forward, "z": up}

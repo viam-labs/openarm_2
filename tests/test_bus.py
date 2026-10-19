@@ -22,5 +22,6 @@ def test_first_target_enables_a_refreshed_motor():
     session = CanSession("can0")
     session.motors[0x01] = Motor("DM4310", 0x01, 0x11)
     session.set_target(0x01, 0.1, 10.0, 1.0)
-    assert session.motors[0x01].mode == "enable"
-    assert session.motors[0x01].enable_cycles == 0
+    assert session.motors[0x01].mode == "configure"
+    assert session.motors[0x01].configure_cycles == 0
+    assert session.motors[0x01].has_target

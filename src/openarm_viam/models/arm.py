@@ -7,6 +7,8 @@ inverse kinematics from the URDF returned by ``get_kinematics`` and calls
 
 from __future__ import annotations
 
+import math
+from collections.abc import AsyncIterator
 from typing import Any, ClassVar, Mapping, Sequence
 
 from typing_extensions import Self
@@ -21,7 +23,7 @@ from viam.utils import ValueTypes, struct_to_dict
 
 from openarm_viam import description as model
 from openarm_viam.can.bus import CanSession, Motor, acquire, release
-from openarm_viam.models.motion import Motion, operation_from, wait_until
+from openarm_viam.models.motion import Motion, feedback_timeout, operation_from, wait_for_enable, wait_until
 
 
 class _ArmBase(Arm):
@@ -30,6 +32,7 @@ class _ArmBase(Arm):
         self.side = "right"
         self.positions = [0.0] * model.ARM_JOINTS
         self.motion = Motion()
+        self.command_speeds = list(model.ARM_SPEEDS)
         self.kinematics = model.arm_urdf(self.side).encode("utf-8")
 
     def _apply_side(self, side: str) -> None:
@@ -57,7 +60,8 @@ class _ArmBase(Arm):
     async def get_joint_positions(
         self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ) -> JointPositions:
-        return JointPositions(values=list(self.positions))
+        # Viam joint positions are degrees. The model and the motors stay in radians.
+        return JointPositions(values=[math.degrees(position) for position in self.positions])
 
     async def get_kinematics(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         return (KinematicsFileFormat.KINEMATICS_FILE_FORMAT_URDF, self.kinematics)
@@ -66,7 +70,11 @@ class _ArmBase(Arm):
         return self.motion.moving
 
     async def get_status(self, *, timeout: float | None = None, **kwargs) -> Mapping[str, ValueTypes]:
-        return {"side": self.side, "joints": list(self.positions), "moving": self.motion.moving}
+        return {
+            "side": self.side,
+            "joints_degrees": [math.degrees(position) for position in self.positions],
+            "moving": self.motion.moving,
+        }
 
     @run_with_operation
     async def move_to_joint_positions(
@@ -77,13 +85,73 @@ class _ArmBase(Arm):
         timeout: float | None = None,
         **kwargs,
     ):
-        goal = model.clamp_arm(self.side, list(positions.values))
+        goal = model.clamp_arm(self.side, _radians(positions.values))
         operation = operation_from(self, kwargs)
 
         async def update(values):
             self.positions = list(values)
 
-        self.positions = await self.motion.run(self.positions, goal, model.ARM_SPEEDS, update, operation)
+        self.positions = await self.motion.run(self.positions, goal, self.command_speeds, update, operation)
+
+    async def move_through_joint_positions(
+        self,
+        positions: list[JointPositions],
+        options: Any = None,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        previous = self.command_speeds
+        self.command_speeds = _speeds_for(options)
+        try:
+            for waypoint in positions:
+                await self.move_to_joint_positions(waypoint, extra=extra, timeout=timeout, **kwargs)
+        finally:
+            self.command_speeds = previous
+
+    async def move_through_joint_positions_streamed(
+        self,
+        batches: AsyncIterator[list[Arm.TrajectoryPoint]],
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> AsyncIterator[Arm.TrajectoryUpdate]:
+        sent = False
+        async for batch in batches:
+            for point in batch:
+                await self.move_to_joint_positions(
+                    JointPositions(values=point.positions), extra=extra, timeout=timeout, **kwargs
+                )
+            yield Arm.TrajectoryUpdate()
+            sent = True
+        if not sent:
+            yield Arm.TrajectoryUpdate()
+
+    async def get_3d_models(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+        return {}
+
+    async def set_manual_mode(
+        self,
+        manual_mode: bool,
+        enabled_for: int = 0,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
+        if manual_mode:
+            raise NotImplementedError("OpenArm has no software manual mode")
+
+    async def get_manual_mode(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> bool:
+        return False
+
+    async def get_properties(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+        # Newer SDKs require this. The response type is not in older wheels.
+        from viam.proto.component.arm import GetPropertiesResponse
+
+        return GetPropertiesResponse(support_manual_mode=False, support_cartesian_commands=False)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         self.motion.cancel()
@@ -173,13 +241,19 @@ class OpenArm(_ArmBase, EasyResource):
         **kwargs,
     ):
         session = self._session()
+        session.prepare(self.send_ids)
         await wait_until(
             lambda: self._feedback_ready(),
             1.0,
-            f"timed out waiting for feedback on {self.interface}",
+            feedback_timeout(self.interface, session),
+        )
+        await wait_for_enable(
+            self.interface,
+            session,
+            [(f"joint{index + 1}", send_id) for index, send_id in enumerate(self.send_ids)],
         )
         self._read_feedback()
-        goal = model.clamp_arm(self.side, list(positions.values))
+        goal = model.clamp_arm(self.side, _radians(positions.values))
         operation = operation_from(self, kwargs)
 
         async def update(values):
@@ -188,7 +262,7 @@ class OpenArm(_ArmBase, EasyResource):
             self.positions = list(values)
             self._command(values)
 
-        self.positions = await self.motion.run(self.positions, goal, model.ARM_SPEEDS, update, operation)
+        self.positions = await self.motion.run(self.positions, goal, self.command_speeds, update, operation)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         await super().stop(extra=extra, timeout=timeout, **kwargs)
@@ -236,6 +310,29 @@ class OpenArm(_ArmBase, EasyResource):
                 self.kp[index] * self.gain_scale,
                 self.kd[index] * self.gain_scale,
             )
+
+
+def _radians(values: Sequence[float]) -> list[float]:
+    return [math.radians(value) for value in values]
+
+
+def _speeds_for(options: Any) -> list[float]:
+    speeds = list(model.ARM_SPEEDS)
+    if options is None:
+        return speeds
+    per_joint = list(getattr(options, "max_vel_degs_per_sec_joints", []) or [])
+    if per_joint:
+        capped = []
+        for index, speed in enumerate(speeds):
+            cap = math.radians(per_joint[index]) if index < len(per_joint) else speed
+            capped.append(min(speed, cap) if cap > 0 else speed)
+        return capped
+    has_field = getattr(options, "HasField", None)
+    if callable(has_field) and has_field("max_vel_degs_per_sec"):
+        cap = math.radians(options.max_vel_degs_per_sec)
+        if cap > 0:
+            return [min(speed, cap) for speed in speeds]
+    return speeds
 
 
 def _require_side(attributes: Mapping[str, Any]) -> str:

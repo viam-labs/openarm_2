@@ -5,6 +5,7 @@
   "url": "https://github.com/viam-labs/openarm_2",
   "description": "OpenArm 2.0 arm and pinch gripper drivers for Viam, including fake models for motion-planning tests.",
   "entrypoint": "run.sh",
+  "first_run": "setup.sh",
   "models": [
     {
       "api": "rdk:component:arm",

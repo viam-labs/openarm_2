@@ -2,8 +2,9 @@
 
 Numbers are taken from the public OpenArm v2.0 description (joint origins,
 axes, limits, and body mount points) and from the OpenArm driver offsets and
-MIT gains. Link collision uses cylinders and boxes sized from those link
-lengths so the module does not vendor mesh files.
+MIT gains. Link collision uses boxes sized from those link lengths. Viam's URDF
+importer rejects standalone cylinders, and a model that fails to parse is
+omitted from the frame system. The module does not vendor mesh files.
 """
 
 from __future__ import annotations
@@ -46,17 +47,18 @@ _EFFORT = (40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0)
 # Per-joint speed caps from the OpenArm driver, in rad/s.
 ARM_SPEEDS = (1.8, 1.8, 3.3, 2.3, 3.5, 3.5, 3.5)
 
-# MIT gains from the OpenArm driver. gain_scale multiplies both.
-ARM_KP = (230.0, 230.0, 190.0, 190.0, 30.0, 30.0, 30.0)
-ARM_KD = (2.7, 2.7, 2.2, 2.2, 1.5, 1.5, 1.5)
-GRIPPER_KP = 10.0
-GRIPPER_KD = 0.2
+# MIT gains from the OpenArm driver and ROS 2 hardware interface. gain_scale multiplies both.
+ARM_KP = (70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0)
+ARM_KD = (2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5)
+# Position-force limits from the OpenArm driver. Torque is a fraction of the 4.5 Nm motor rating.
+GRIPPER_POS_SPEED = 50.0
+GRIPPER_POS_TORQUE = 1.0 / 4.5
 
 # Motor encoder zero is not the URDF zero. motor = kinematic + offset.
 RIGHT_OFFSETS = (0.0, -0.506145, 1.570796, -1.745329, 0.0, 0.331612, -1.570796, 0.0)
 LEFT_OFFSETS = (0.0, 0.506145, -1.570796, -1.745329, 0.0, -0.331612, 1.570796, 0.0)
 
-MOTOR_TYPES = ("DM8009", "DM8009", "DM4340", "DM4340", "DM4310", "DM4310", "DM4310", "DM4310")
+MOTOR_TYPES = ("DM8009", "DM8009", "DM4340", "DM4340", "DM4310", "DM4310", "DM4310", "DM3507")
 SEND_IDS = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08)
 RECV_IDS = (0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18)
 
@@ -134,10 +136,11 @@ def arm_joints(side: str) -> tuple[JointSpec, ...]:
         axis = _AXES[index]
         lower, upper = _LIMITS[index]
         if side_name(side) == "left" and index in _LEFT_REFLECT_JOINTS:
+            # v2 reflects these joints across Y. A reflected joint negates its
+            # angle even when the axis has no Y component, which is joint2.
             origin = (origin[0], -origin[1], origin[2])
             axis = (axis[0], -axis[1], axis[2])
-            if _dot(_AXES[index], axis) < 0:
-                lower, upper = -upper, -lower
+            lower, upper = -upper, -lower
         specs.append(
             JointSpec(
                 origin=origin,
@@ -193,11 +196,13 @@ def arm_urdf(side: str) -> str:
     for index in range(ARM_JOINTS + 1):
         name = f"{prefix}_base_link" if index == 0 else f"{prefix}_link{index}"
         lines.append(f'  <link name="{name}">')
+        # Boxes, not cylinders. Viam's URDF importer rejects a standalone cylinder,
+        # and a model that fails to parse is left out of the frame system.
         if index < ARM_JOINTS:
-            lines.append(_cylinder_collision(specs[index].origin, _UPPER_RADIUS if index < 4 else _WRIST_RADIUS))
+            thickness = _UPPER_RADIUS * 2 if index < 4 else _WRIST_RADIUS * 2
+            lines.append(_box_collision(specs[index].origin, thickness))
         else:
-            lines.append('    <collision><origin xyz="0 0 0" rpy="0 0 0"/>')
-            lines.append('      <geometry><box size="0.04 0.04 0.04"/></geometry></collision>')
+            lines.append(_box_collision((0.0, 0.0, 0.0), 0.04))
         lines.append("  </link>")
     for index, spec in enumerate(specs):
         parent = f"{prefix}_base_link" if index == 0 else f"{prefix}_link{index}"
@@ -219,38 +224,24 @@ def arm_urdf(side: str) -> str:
 
 
 def gripper_urdf(side: str) -> str:
-    """One actuated pinch joint. 0 is closed and 1 is open."""
+    """Static gripper volume. The pinch itself is not a frame-system joint.
+
+    Viam needs exactly one leaf frame. The two finger joints in the OpenArm
+    description are a branch, so this model keeps a single box at the grasp
+    frame configured on the gripper component.
+    """
 
     side = side_name(side)
     prefix = f"openarm_{side}_gripper"
-    # Left-arm reflection flips the finger Y offsets.
-    finger_y = -0.018 if side == "left" else 0.018
     lines = [
         '<?xml version="1.0"?>',
         f'<robot name="{prefix}">',
         f'  <link name="{prefix}_base_link">',
-        '    <collision><origin xyz="0 0 -0.03" rpy="0 0 0"/>',
-        '      <geometry><box size="0.08 0.06 0.06"/></geometry></collision>',
+        '    <collision><origin xyz="0 0 0" rpy="0 0 0"/>',
+        '      <geometry><box size="0.08 0.05 0.04"/></geometry></collision>',
         "  </link>",
+        "</robot>",
     ]
-    for finger, y_sign in (("1", 1.0), ("2", -1.0)):
-        lines.append(f'  <link name="{prefix}_finger{finger}">')
-        lines.append('    <collision><origin xyz="0 0 -0.035" rpy="0 0 0"/>')
-        lines.append('      <geometry><box size="0.02 0.012 0.07"/></geometry></collision>')
-        lines.append("  </link>")
-        lines.append(f'  <joint name="{prefix}_joint{finger}" type="revolute">')
-        lines.append(f'    <parent link="{prefix}_base_link"/>')
-        lines.append(f'    <child link="{prefix}_finger{finger}"/>')
-        y = finger_y * y_sign
-        lines.append(f'    <origin xyz="-0.02193 {_fmt(y)} -0.068" rpy="0 0 0"/>')
-        # Positive joint motion opens. The two fingers spin in opposite directions.
-        axis = "1 0 0" if finger == "1" else "-1 0 0"
-        lines.append(f"    <axis xyz=\"{axis}\"/>")
-        lines.append('    <limit lower="0" upper="1" effort="7" velocity="1"/>')
-        if finger == "2":
-            lines.append(f'    <mimic joint="{prefix}_joint1" multiplier="1" offset="0"/>')
-        lines.append("  </joint>")
-    lines.append("</robot>")
     return "\n".join(lines) + "\n"
 
 
@@ -268,20 +259,19 @@ def forward_kinematics(side: str, joints: Sequence[float]) -> tuple[tuple[float,
     return position_mm, _orientation_vector(transform)  # type: ignore[return-value]
 
 
-def _cylinder_collision(origin: tuple[float, float, float], radius: float) -> str:
-    length = math.sqrt(sum(value * value for value in origin))
-    if length < 1e-6:
-        return (
-            f'    <collision><origin xyz="0 0 0" rpy="0 0 0"/>'
-            f'<geometry><sphere radius="{_fmt(radius)}"/></geometry></collision>'
-        )
-    midpoint = tuple(value / 2.0 for value in origin)
-    roll, pitch, yaw = _rpy_taking_z_to(origin)
-    mx, my, mz = midpoint
+def _box_collision(origin: tuple[float, float, float], thickness: float) -> str:
+    """Axis-aligned box covering the link segment. Joint origins are axis-aligned."""
+
+    size = [thickness, thickness, thickness]
+    for index, value in enumerate(origin):
+        if abs(value) > 1e-9:
+            size[index] = max(abs(value), thickness)
+    center = tuple(value / 2.0 for value in origin)
+    sx, sy, sz = size
+    cx, cy, cz = center
     return (
-        f'    <collision><origin xyz="{_fmt(mx)} {_fmt(my)} {_fmt(mz)}" '
-        f'rpy="{_fmt(roll)} {_fmt(pitch)} {_fmt(yaw)}"/>'
-        f'<geometry><cylinder radius="{_fmt(radius)}" length="{_fmt(length)}"/></geometry></collision>'
+        f'    <collision><origin xyz="{_fmt(cx)} {_fmt(cy)} {_fmt(cz)}" rpy="0 0 0"/>'
+        f'<geometry><box size="{_fmt(sx)} {_fmt(sy)} {_fmt(sz)}"/></geometry></collision>'
     )
 
 
@@ -332,32 +322,6 @@ def _matmul(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -
     return result
 
 
-def _rpy_taking_z_to(vector: tuple[float, float, float]) -> tuple[float, float, float]:
-    length = math.sqrt(_dot(vector, vector))
-    z_axis = tuple(component / length for component in vector)
-    helper = (1.0, 0.0, 0.0) if abs(z_axis[0]) < 0.9 else (0.0, 1.0, 0.0)
-    x_axis = _normalize(_cross(helper, z_axis))
-    y_axis = _cross(z_axis, x_axis)
-    # Columns of R are the images of the basis, so R maps Z to z_axis.
-    rotation = (
-        (x_axis[0], y_axis[0], z_axis[0]),
-        (x_axis[1], y_axis[1], z_axis[1]),
-        (x_axis[2], y_axis[2], z_axis[2]),
-    )
-    return _matrix_to_rpy(rotation)
-
-
-def _matrix_to_rpy(rotation: tuple[tuple[float, float, float], ...]) -> tuple[float, float, float]:
-    pitch = math.asin(max(-1.0, min(1.0, -rotation[2][0])))
-    if abs(rotation[2][0]) < 0.999999:
-        roll = math.atan2(rotation[2][1], rotation[2][2])
-        yaw = math.atan2(rotation[1][0], rotation[0][0])
-    else:
-        roll = math.atan2(-rotation[1][2], rotation[1][1])
-        yaw = 0.0
-    return roll, pitch, yaw
-
-
 def _orientation_vector(transform: Sequence[Sequence[float]]) -> tuple[float, float, float, float]:
     rotation = tuple(tuple(transform[row][col] for col in range(3)) for row in range(3))
     trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
@@ -371,14 +335,6 @@ def _orientation_vector(transform: Sequence[Sequence[float]]) -> tuple[float, fl
     )
     axis = _normalize(axis)
     return (axis[0], axis[1], axis[2], math.degrees(angle))
-
-
-def _cross(left: tuple[float, float, float], right: tuple[float, float, float]) -> tuple[float, float, float]:
-    return (
-        left[1] * right[2] - left[2] * right[1],
-        left[2] * right[0] - left[0] * right[2],
-        left[0] * right[1] - left[1] * right[0],
-    )
 
 
 def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]:

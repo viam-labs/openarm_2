@@ -19,11 +19,15 @@ def test_joint_limits_are_clamped_and_mirrored():
     assert clamped[1] == model.arm_joints("right")[1].lower
     assert clamped[3] == model.arm_joints("right")[3].upper
 
-    right = model.arm_joints("right")[0]
-    left = model.arm_joints("left")[0]
-    assert left.lower == -right.upper
-    assert left.upper == -right.lower
-    assert left.axis[1] == -right.axis[1]
+    right = model.arm_joints("right")
+    left = model.arm_joints("left")
+    assert left[0].lower == -right[0].upper
+    assert left[0].upper == -right[0].lower
+    assert left[0].axis[1] == -right[0].axis[1]
+    # Joint2's axis has no Y component, and the v2 preset still negates its limits.
+    assert left[1].axis == right[1].axis
+    assert left[1].lower == pytest.approx(-right[1].upper)
+    assert left[1].upper == pytest.approx(-right[1].lower)
 
 
 def test_gripper_open_amount_round_trip():
@@ -40,7 +44,9 @@ def test_arm_urdf_has_seven_joints_and_collision():
         root = ET.fromstring(model.arm_urdf(side))
         joints = [joint for joint in root.findall("joint") if joint.get("type") == "revolute"]
         assert len(joints) == 7
-        assert root.find("link/collision/geometry/cylinder") is not None
+        assert root.find("link/collision/geometry/box") is not None
+        assert root.find("link/collision/geometry/cylinder") is None
+        assert root.find("joint") is not None
         limit = joints[0].find("limit")
         assert limit is not None
         assert float(limit.get("lower")) == model.arm_joints(side)[0].lower

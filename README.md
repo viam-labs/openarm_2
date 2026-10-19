@@ -24,20 +24,19 @@ Attributes:
 | `gain_scale` | no | Multiplier on the MIT gains. Default `1.0` |
 | `kp`, `kd` | no | Seven MIT gains. Defaults are the OpenArm driver values |
 
-Joint commands are URDF angles in radians. Motor positions are those angles plus the driver zero offsets. The first move enables the motors. `stop` cancels the trajectory and holds. Closing the component disables its motors.
+Joint commands use Viam's degree units. The module converts those to the URDF's radians before applying motor offsets. The first move clears latched motor faults and enables the motors. If a motor does not report enabled within two seconds, the move fails and lists each joint's state, for example `joint3=undervoltage`. `stop` cancels the trajectory and holds. Closing the component disables its motors.
 
 `move_to_position` is not implemented. Send a pose goal through the motion service. The service reads `get_kinematics` and calls `move_to_joint_positions`.
 
 ### Gripper
 
-The gripper uses motor `0x08` on the arm's CAN interface, so the arm and gripper in one module process share a single socket. Input `0` is closed and `1` is open.
+The gripper uses motor `0x08` (a DM3507) on the arm's CAN interface, so the arm and gripper in one module process share a single socket. Input `0` is closed and `1` is open. Like the OpenArm driver, it runs in position-force mode with a speed and torque limit, so it stops on an object instead of pushing at full stiffness.
 
 | Attribute | Required | Description |
 | --- | --- | --- |
 | `side` | yes | `left` or `right` |
 | `can_interface` | hardware only | Same interface as that side's arm |
 | `arm` | no | Arm component name. Returned as a dependency so the arm starts first |
-| `gain_scale` | no | Multiplier on the gripper MIT gains |
 
 ### Fake models
 
@@ -61,7 +60,7 @@ world
     └── left-camera
 ```
 
-Arm bases sit on the body at the v2 mount points: right `(0, -30, 697)` mm and left `(0, 30, 697)` mm. Gripper frames are the pinch center. `head-stereo` starts at the commented `zed_front_mount_point` from the v2 description, `(120, 0, 820)` mm on the body, tilted down 40 degrees. The body box stops below that camera. Treat the head pose as a starting value and correct it after one measurement.
+The body frame uses the Viam convention: `+Y` forward, `+Z` up, and `+X` right. The description's mounts are `+X` forward and `+Y` left, so each arm is yawed 90 degrees where it meets the body. In that frame the right arm base is `(30, 0, 697)` mm and the left arm base is `(-30, 0, 697)` mm. Gripper frames are the pinch center, still expressed in the arm flange. `head-stereo` is the commented `zed_front_mount_point`, `(0, 120, 820)` mm, looking forward. The 125 mm bar lies across the body. The body box stops below that camera.
 
 `body`, `head-stereo`, `right-camera`, and `left-camera` are builtin fake cameras so the frames and collision boxes exist before real cameras are attached. Camera drivers are not part of this module.
 
@@ -75,8 +74,8 @@ If a plan fails because the gripper model intersects the flange, allow that pair
 Bring the interfaces up before viam-server starts the module:
 
 ```sh
-sudo ip link set can0 up type can bitrate 1000000 dbitrate 5000000 fd on
-sudo ip link set can1 up type can bitrate 1000000 dbitrate 5000000 fd on
+sudo ip link set can0 up type can bitrate 1000000 dbitrate 5000000 fd on restart-ms 100
+sudo ip link set can1 up type can bitrate 1000000 dbitrate 5000000 fd on restart-ms 100
 ```
 
 The fragments install registry module `viam-labs:openarm-2`. For a local checkout, point the machine config at `run.sh` instead of the registry entry.
@@ -85,7 +84,7 @@ The fragments install registry module `viam-labs:openarm-2`. For a local checkou
 
 Keep an emergency stop within reach, keep the workspace clear, and know how to cut power. Gains start from the published OpenArm driver defaults. Use `gain_scale` below `1` the first time you enable a new arm, then raise it only after a small move looks right. A large position step at full gain can produce a fast motion.
 
-Motors stay disabled until the first joint move. That move waits for feedback and holds the measured pose as the start of the trajectory, so the arm is not commanded to the URDF zero just because the module started.
+Motors stay disabled until the first joint or gripper command. That command enables them and holds the measured pose until the trajectory starts, so the arm is not commanded to the URDF zero just because the module started. A motor LED that turns green and then red means it stopped hearing CAN. `restart-ms 100` brings the interface back after a bus-off.
 
 ## Development
 
@@ -94,4 +93,4 @@ python3 -m pip install -r requirements-dev.txt
 python3 -m pytest
 ```
 
-The module entrypoint is `python3 -m openarm_viam` with `src` on `PYTHONPATH`, which is what `run.sh` does.
+`meta.json` sets `first_run` to `setup.sh`, which installs `viam-sdk` and `python-can` into `.venv`. `run.sh` runs that setup again if `.venv` is missing, then starts `.venv/bin/python` with `src` on `PYTHONPATH`.

@@ -1,7 +1,8 @@
 """OpenArm 2.0 pinch gripper.
 
 The gripper motor shares the arm's CAN interface. ``get_current_inputs``
-returns one value: 0 is closed and 1 is open, matching the gripper URDF.
+returns one value: 0 is closed and 1 is open. The URDF is a single box at the
+grasp frame, because the two finger joints would be a branch Viam cannot import.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from viam.utils import ValueTypes, struct_to_dict
 
 from openarm_viam import description as model
 from openarm_viam.can.bus import CanSession, Motor, acquire, release
-from openarm_viam.models.motion import Motion, operation_from, wait_until
+from openarm_viam.models.motion import Motion, feedback_timeout, operation_from, wait_for_enable, wait_until
 
 _OPEN_INPUT = [model.GRIPPER_OPEN]
 _CLOSED_INPUT = [model.GRIPPER_CLOSED]
@@ -109,7 +110,6 @@ class OpenGripper(_GripperBase, EasyResource):
     def __init__(self, name: str):
         super().__init__(name)
         self.interface = ""
-        self.gain_scale = 1.0
         self.session: CanSession | None = None
         self.send_id = model.SEND_IDS[model.ARM_JOINTS]
 
@@ -132,13 +132,15 @@ class OpenGripper(_GripperBase, EasyResource):
         attributes = _hardware_attributes(struct_to_dict(config.attributes))
         self._apply_side(attributes["side"])
         self.interface = attributes["can_interface"]
-        self.gain_scale = float(attributes.get("gain_scale", 1.0))
         self.session = acquire(self.interface)
         self.session.add_motor(
             Motor(
                 motor_type=model.MOTOR_TYPES[model.ARM_JOINTS],
                 send_id=self.send_id,
                 recv_id=model.RECV_IDS[model.ARM_JOINTS],
+                control="posforce",
+                speed=model.GRIPPER_POS_SPEED,
+                torque_pu=model.GRIPPER_POS_TORQUE,
             )
         )
         self.logger.info("OpenArm gripper %s using %s side %s", self.name, self.interface, self.side)
@@ -156,11 +158,13 @@ class OpenGripper(_GripperBase, EasyResource):
         if not values:
             raise ValueError("gripper expects one input, 0 closed and 1 open")
         session = self._session()
+        session.prepare([self.send_id])
         await wait_until(
             lambda: session.measured(self.send_id) is not None,
             1.0,
-            f"timed out waiting for gripper feedback on {self.interface}",
+            feedback_timeout(self.interface, session),
         )
+        await wait_for_enable(self.interface, session, [("gripper", self.send_id)])
         self._read_feedback()
         goal = min(model.GRIPPER_OPEN, max(model.GRIPPER_CLOSED, float(values[0])))
         operation = operation_from(self, kwargs)
@@ -169,12 +173,7 @@ class OpenGripper(_GripperBase, EasyResource):
             if not self.motion.moving:
                 return
             self.open_amount = commanded[0]
-            session.set_target(
-                self.send_id,
-                model.gripper_motor(self.side, self.open_amount),
-                model.GRIPPER_KP * self.gain_scale,
-                model.GRIPPER_KD * self.gain_scale,
-            )
+            session.set_posforce_target(self.send_id, model.gripper_motor(self.side, self.open_amount))
 
         await self.motion.run([self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation)
         self._read_feedback()
