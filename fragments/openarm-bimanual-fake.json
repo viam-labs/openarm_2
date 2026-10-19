@@ -1,0 +1,271 @@
+{
+  "name": "openarm-bimanual-fake",
+  "fragment": {
+    "modules": [
+      {
+        "name": "openarm",
+        "type": "registry",
+        "module_id": "viam-labs:openarm-2",
+        "version": "latest"
+      }
+    ],
+    "components": [
+      {
+        "name": "body",
+        "namespace": "rdk",
+        "type": "camera",
+        "model": "rdk:builtin:fake",
+        "attributes": {},
+        "depends_on": [],
+        "frame": {
+          "parent": "world",
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "z": 1,
+              "th": 0
+            }
+          },
+          "geometry": {
+            "type": "box",
+            "x": 250,
+            "y": 200,
+            "z": 740,
+            "translation": {
+              "x": 0,
+              "y": 0,
+              "z": 370
+            }
+          }
+        }
+      },
+      {
+        "name": "head-stereo",
+        "namespace": "rdk",
+        "type": "camera",
+        "model": "rdk:builtin:fake",
+        "attributes": {},
+        "depends_on": [],
+        "frame": {
+          "parent": "body",
+          "translation": {
+            "x": 120.0,
+            "y": 0.0,
+            "z": 820.0
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 1,
+              "z": 0,
+              "th": -40
+            }
+          },
+          "geometry": {
+            "type": "box",
+            "x": 145,
+            "y": 55,
+            "z": 50,
+            "translation": {
+              "x": 0,
+              "y": 0,
+              "z": -25
+            }
+          }
+        }
+      },
+      {
+        "name": "right-arm",
+        "namespace": "rdk",
+        "type": "arm",
+        "model": "viam-labs:openarm-2:fake-arm",
+        "attributes": {
+          "side": "right"
+        },
+        "depends_on": [],
+        "frame": {
+          "parent": "body",
+          "translation": {
+            "x": 0.0,
+            "y": -30.0,
+            "z": 697.0
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "z": 1,
+              "th": 0
+            }
+          }
+        }
+      },
+      {
+        "name": "right-gripper",
+        "namespace": "rdk",
+        "type": "gripper",
+        "model": "viam-labs:openarm-2:fake-gripper",
+        "attributes": {
+          "side": "right",
+          "arm": "right-arm",
+          "notes": "If a plan fails because the gripper intersects the flange, allow that pair in the motion service collision specification."
+        },
+        "depends_on": [
+          "right-arm"
+        ],
+        "frame": {
+          "parent": "right-arm",
+          "translation": {
+            "x": -1.4300000000000006,
+            "y": 0.0,
+            "z": -138.0
+          },
+          "orientation": {
+            "type": "euler_angles",
+            "value": {
+              "roll": 180,
+              "pitch": 90,
+              "yaw": 180
+            }
+          }
+        }
+      },
+      {
+        "name": "right-camera",
+        "namespace": "rdk",
+        "type": "camera",
+        "model": "rdk:builtin:fake",
+        "attributes": {},
+        "depends_on": [],
+        "frame": {
+          "parent": "right-gripper",
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": -40
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "z": 1,
+              "th": 0
+            }
+          },
+          "geometry": {
+            "type": "box",
+            "x": 40,
+            "y": 30,
+            "z": 25
+          }
+        }
+      },
+      {
+        "name": "left-arm",
+        "namespace": "rdk",
+        "type": "arm",
+        "model": "viam-labs:openarm-2:fake-arm",
+        "attributes": {
+          "side": "left"
+        },
+        "depends_on": [],
+        "frame": {
+          "parent": "body",
+          "translation": {
+            "x": 0.0,
+            "y": 30.0,
+            "z": 697.0
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "z": 1,
+              "th": 0
+            }
+          }
+        }
+      },
+      {
+        "name": "left-gripper",
+        "namespace": "rdk",
+        "type": "gripper",
+        "model": "viam-labs:openarm-2:fake-gripper",
+        "attributes": {
+          "side": "left",
+          "arm": "left-arm",
+          "notes": "If a plan fails because the gripper intersects the flange, allow that pair in the motion service collision specification."
+        },
+        "depends_on": [
+          "left-arm"
+        ],
+        "frame": {
+          "parent": "left-arm",
+          "translation": {
+            "x": -1.4300000000000006,
+            "y": 0.0,
+            "z": -138.0
+          },
+          "orientation": {
+            "type": "euler_angles",
+            "value": {
+              "roll": 180,
+              "pitch": 90,
+              "yaw": 180
+            }
+          }
+        }
+      },
+      {
+        "name": "left-camera",
+        "namespace": "rdk",
+        "type": "camera",
+        "model": "rdk:builtin:fake",
+        "attributes": {},
+        "depends_on": [],
+        "frame": {
+          "parent": "left-gripper",
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": -40
+          },
+          "orientation": {
+            "type": "ov_degrees",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "z": 1,
+              "th": 0
+            }
+          },
+          "geometry": {
+            "type": "box",
+            "x": 40,
+            "y": 30,
+            "z": 25
+          }
+        }
+      }
+    ],
+    "services": [
+      {
+        "name": "builtin",
+        "namespace": "rdk",
+        "type": "motion",
+        "model": "rdk:builtin:builtin"
+      }
+    ]
+  }
+}

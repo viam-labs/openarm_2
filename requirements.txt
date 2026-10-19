@@ -1,0 +1,2 @@
+viam-sdk>=0.46
+python-can>=4.3

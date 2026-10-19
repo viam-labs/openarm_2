@@ -1,0 +1,41 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "viam-labs:openarm-2",
+  "visibility": "public",
+  "url": "https://github.com/viam-labs/openarm_2",
+  "description": "OpenArm 2.0 arm and pinch gripper drivers for Viam, including fake models for motion-planning tests.",
+  "entrypoint": "run.sh",
+  "models": [
+    {
+      "api": "rdk:component:arm",
+      "model": "viam-labs:openarm-2:arm",
+      "short_description": "OpenArm 2.0 7-DoF arm over SocketCAN",
+      "markdown_link": "README.md#arm"
+    },
+    {
+      "api": "rdk:component:gripper",
+      "model": "viam-labs:openarm-2:gripper",
+      "short_description": "OpenArm 2.0 pinch gripper on the arm CAN bus",
+      "markdown_link": "README.md#gripper"
+    },
+    {
+      "api": "rdk:component:arm",
+      "model": "viam-labs:openarm-2:fake-arm",
+      "short_description": "OpenArm 2.0 arm kinematics with no CAN hardware",
+      "markdown_link": "README.md#fake-models"
+    },
+    {
+      "api": "rdk:component:gripper",
+      "model": "viam-labs:openarm-2:fake-gripper",
+      "short_description": "OpenArm 2.0 pinch gripper with no CAN hardware",
+      "markdown_link": "README.md#fake-models"
+    }
+  ],
+  "build": {
+    "setup": "./setup.sh",
+    "build": "./build.sh",
+    "path": "dist/archive.tar.gz",
+    "arch": ["linux/amd64", "linux/arm64"]
+  },
+  "markdown_link": "README.md"
+}
