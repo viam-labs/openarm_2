@@ -389,25 +389,34 @@ class OpenArm(_ArmBase, EasyResource):
             name=f"openarm-settle-{self.name}",
         )
 
+    def _on_target(self, goal: Sequence[float]) -> bool:
+        self._read_feedback()
+        return max(abs(desired - current) for desired, current in zip(goal, self.positions)) <= (
+            model.SETTLE_EPS_RAD
+        )
+
     async def _settle_to_goal(
         self, goal: Sequence[float], holding: Sequence[bool], token: int
     ) -> None:
         """Drive measured pose to the goal using still-gated bias updates, then freeze.
 
-        Runs after the move RPC returns. Each pass waits until the arm is nearly still,
-        reads encoders, and nudges a frozen gravity bias by
-        ``settle_gain * (goal - measured)``. A new move, stop, or power_off cancels this
-        task so consecutive jogs are not serialized behind settle.
+        Runs after the move RPC returns. Holds the goal first and only enters the
+        still-wait / bias loop when measured joints are already off target. A new
+        move, stop, or power_off cancels this task so consecutive jogs are not
+        serialized behind settle.
         """
 
         try:
             self._servo_goal = list(goal)
             self._hold_bias = [0.0] * len(goal)
+            if token != self._settle_token:
+                return
+            self._command(goal, holding)
             if self.settle_gain <= 0 or self.settle_passes <= 0:
-                if token != self._settle_token:
-                    return
-                self._command(goal, holding)
                 self._read_feedback()
+                return
+            # No droop — skip the pause / still-wait / bias path entirely.
+            if self._on_target(goal):
                 return
 
             for _ in range(self.settle_passes):
@@ -417,10 +426,8 @@ class OpenArm(_ArmBase, EasyResource):
                     return
                 if token != self._settle_token:
                     return
-                self._read_feedback()
-                errors = [desired - current for desired, current in zip(goal, self.positions)]
-                if max(abs(error) for error in errors) <= model.SETTLE_EPS_RAD:
-                    break
+                if self._on_target(goal):
+                    return
                 self._hold_bias = model.accumulate_hold_bias(
                     self._hold_bias, goal, self.positions, self.settle_gain
                 )

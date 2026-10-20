@@ -183,3 +183,50 @@ def test_background_settle_is_cancelled_by_the_next_move():
         arm._cancel_settle()
 
     asyncio.run(run())
+
+
+def test_settle_skips_wait_when_already_on_target():
+    from openarm_viam.can.bus import CanSession, Motor
+    from openarm_viam.can.damiao import STATUS_ENABLED
+    from openarm_viam.models.arm import OpenArm
+
+    async def run():
+        arm = OpenArm("right-arm")
+        arm.side = "right"
+        goal = [0.1, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0]
+        session = CanSession("can0")
+        session.motors = {
+            send_id: Motor(
+                "DM4310",
+                send_id,
+                send_id + 0x10,
+                mode="mit",
+                measured=goal[index],
+                error=STATUS_ENABLED,
+                last_rx=time.monotonic(),
+            )
+            for index, send_id in enumerate(arm.send_ids)
+        }
+        arm.session = session
+        arm.positions = list(goal)
+        waited = False
+
+        async def fail_if_wait(token):
+            nonlocal waited
+            waited = True
+            raise AssertionError("settle should not wait when already on target")
+
+        arm._wait_nearly_still = fail_if_wait  # type: ignore[method-assign]
+        commands: list[list[float]] = []
+        original_command = arm._command
+
+        def track_command(kinematic, holding=None):
+            commands.append(list(kinematic))
+            original_command(kinematic, holding)
+
+        arm._command = track_command  # type: ignore[method-assign]
+        await arm._settle_to_goal(goal, [True] * 7, arm._settle_token)
+        assert waited is False
+        assert commands == [goal]
+
+    asyncio.run(run())
