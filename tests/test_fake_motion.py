@@ -144,3 +144,42 @@ def test_hardware_arm_power_off_disables_motors_without_closing():
         assert all(session.motors[send_id].mode == "idle" for send_id in arm.send_ids)
 
     asyncio.run(run())
+
+
+def test_background_settle_is_cancelled_by_the_next_move():
+    from openarm_viam.models.arm import OpenArm
+
+    async def run():
+        arm = OpenArm("right-arm")
+        arm.side = "right"
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_settle(goal, holding, token):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        arm._settle_to_goal = slow_settle  # type: ignore[method-assign]
+        arm._schedule_settle([0.0] * 7, [True] * 7)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert arm._settle_task is not None and not arm._settle_task.done()
+
+        # A follow-up schedule (what the next move does) must preempt settle.
+        second_started = asyncio.Event()
+
+        async def second_settle(goal, holding, token):
+            second_started.set()
+            await asyncio.sleep(0)
+
+        arm._settle_to_goal = second_settle  # type: ignore[method-assign]
+        arm._schedule_settle([0.1] * 7, [False] * 7)
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+
+        arm._cancel_settle()
+
+    asyncio.run(run())

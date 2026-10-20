@@ -251,6 +251,8 @@ class OpenArm(_ArmBase, EasyResource):
         self._servo_goal: list[float] | None = None
         self._hold_bias: list[float] = [0.0] * model.ARM_JOINTS
         self.velocities = [0.0] * model.ARM_JOINTS
+        self._settle_task: asyncio.Task[None] | None = None
+        self._settle_token = 0
 
     @classmethod
     def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
@@ -316,6 +318,7 @@ class OpenArm(_ArmBase, EasyResource):
         timeout: float | None = None,
         **kwargs,
     ):
+        self._cancel_settle()
         session = self._session()
         session.prepare(self.send_ids)
         await wait_until(
@@ -346,9 +349,11 @@ class OpenArm(_ArmBase, EasyResource):
             self._command(commanded, holding)
 
         self.positions = await self.motion.run(start, goal, self.command_speeds, update, operation)
-        await self._settle_to_goal(goal, holding, operation)
+        # Settle in the background so a follow-up jog is not blocked by gravity trim.
+        self._schedule_settle(goal, holding)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+        self._cancel_settle()
         await super().stop(extra=extra, timeout=timeout, **kwargs)
         if self.session is None:
             return
@@ -359,6 +364,7 @@ class OpenArm(_ArmBase, EasyResource):
         self._command(self._servo_goal)
 
     async def _power_off(self) -> None:
+        self._cancel_settle()
         self.motion.cancel()
         session = self.session
         if session is None:
@@ -368,50 +374,84 @@ class OpenArm(_ArmBase, EasyResource):
         self._hold_bias = [0.0] * model.ARM_JOINTS
         session.disable(self.send_ids)
 
+    def _cancel_settle(self) -> None:
+        self._settle_token += 1
+        task = self._settle_task
+        self._settle_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_settle(self, goal: Sequence[float], holding: Sequence[bool]) -> None:
+        self._cancel_settle()
+        token = self._settle_token
+        self._settle_task = asyncio.create_task(
+            self._settle_to_goal(list(goal), list(holding), token),
+            name=f"openarm-settle-{self.name}",
+        )
+
     async def _settle_to_goal(
-        self, goal: Sequence[float], holding: Sequence[bool], operation: Any
+        self, goal: Sequence[float], holding: Sequence[bool], token: int
     ) -> None:
         """Drive measured pose to the goal using still-gated bias updates, then freeze.
 
-        Each pass waits until the arm is nearly still, reads encoders, and nudges a
-        frozen gravity bias by ``settle_gain * (goal - measured)``. That corrects
-        both short and long finishes. When every joint is within ``SETTLE_EPS``,
-        or passes are exhausted, the last bias is frozen — no live high-rate trim.
+        Runs after the move RPC returns. Each pass waits until the arm is nearly still,
+        reads encoders, and nudges a frozen gravity bias by
+        ``settle_gain * (goal - measured)``. A new move, stop, or power_off cancels this
+        task so consecutive jogs are not serialized behind settle.
         """
 
-        self._servo_goal = list(goal)
-        self._hold_bias = [0.0] * len(goal)
-        if self.settle_gain <= 0 or self.settle_passes <= 0:
-            self._command(goal, holding)
-            self._read_feedback()
-            return
-
-        for _ in range(self.settle_passes):
-            if not await self._wait_nearly_still(operation):
+        try:
+            self._servo_goal = list(goal)
+            self._hold_bias = [0.0] * len(goal)
+            if self.settle_gain <= 0 or self.settle_passes <= 0:
+                if token != self._settle_token:
+                    return
+                self._command(goal, holding)
+                self._read_feedback()
                 return
-            self._read_feedback()
-            errors = [desired - current for desired, current in zip(goal, self.positions)]
-            if max(abs(error) for error in errors) <= model.SETTLE_EPS_RAD:
-                break
-            self._hold_bias = model.accumulate_hold_bias(
-                self._hold_bias, goal, self.positions, self.settle_gain
-            )
-            self._command([desired + bias for desired, bias in zip(goal, self._hold_bias)], holding)
-        self._read_feedback()
 
-    async def _wait_nearly_still(self, operation: Any) -> bool:
+            for _ in range(self.settle_passes):
+                if token != self._settle_token:
+                    return
+                if not await self._wait_nearly_still(token):
+                    return
+                if token != self._settle_token:
+                    return
+                self._read_feedback()
+                errors = [desired - current for desired, current in zip(goal, self.positions)]
+                if max(abs(error) for error in errors) <= model.SETTLE_EPS_RAD:
+                    break
+                self._hold_bias = model.accumulate_hold_bias(
+                    self._hold_bias, goal, self.positions, self.settle_gain
+                )
+                if token != self._settle_token:
+                    return
+                self._command(
+                    [desired + bias for desired, bias in zip(goal, self._hold_bias)], holding
+                )
+            if token == self._settle_token:
+                self._read_feedback()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.logger.exception("background settle failed on %s", self.name)
+
+    async def _wait_nearly_still(self, token: int) -> bool:
         await asyncio.sleep(model.SETTLE_PAUSE_S)
+        if token != self._settle_token:
+            return False
         deadline = asyncio.get_running_loop().time() + model.SETTLE_STILL_TIMEOUT_S
         while asyncio.get_running_loop().time() < deadline:
-            if await operation.is_cancelled():
+            if token != self._settle_token:
                 return False
             self._read_feedback()
             if max(abs(velocity) for velocity in self.velocities) <= model.SETTLE_STILL_VEL_RAD_S:
                 return True
             await asyncio.sleep(0.02)
-        return True
+        return token == self._settle_token
 
     def close_hardware(self) -> None:
+        self._cancel_settle()
         self._servo_goal = None
         self._hold_bias = [0.0] * model.ARM_JOINTS
         session = self.session
@@ -423,6 +463,7 @@ class OpenArm(_ArmBase, EasyResource):
         release(session)
 
     async def close(self):
+        self._cancel_settle()
         self.motion.cancel()
         self.close_hardware()
 
