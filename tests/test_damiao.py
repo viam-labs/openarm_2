@@ -66,12 +66,19 @@ def test_control_mode_and_posforce_frames_match_the_openarm_layout():
 
 
 def test_arm_motor_clears_faults_then_holds_measured_position_once_enabled():
+    from openarm_viam.can.damiao import refresh_packet
+
     motor = Motor("DM4310", 0x01, 0x11, mode="configure")
     for _ in range(3):
-        assert commands_for(motor) == [(0x01, command_packet(CLEAR_ERROR))]
+        assert commands_for(motor) == [(0x01, command_packet(CLEAR_ERROR)), refresh_packet(0x01)]
     assert motor.mode == "enable"
-    for _ in range(ENABLE_CYCLES):
-        assert commands_for(motor) == [(0x01, command_packet(ENABLE))]
+    # No measured yet: enable also clears and polls.
+    frames = commands_for(motor)
+    assert frames[0] == (0x01, command_packet(CLEAR_ERROR))
+    assert frames[1] == (0x01, command_packet(ENABLE))
+    assert frames[2] == refresh_packet(0x01)
+    for _ in range(ENABLE_CYCLES - 1):
+        commands_for(motor)
     motor.measured = 0.4
     motor.error = STATUS_DISABLED
     commands_for(motor)
@@ -84,9 +91,12 @@ def test_arm_motor_clears_faults_then_holds_measured_position_once_enabled():
 
 
 def test_gripper_sets_position_force_mode_before_enabling():
+    from openarm_viam.can.damiao import refresh_packet
+
     motor = Motor("DM3507", 0x08, 0x18, mode="configure", control="posforce")
     assert commands_for(motor) == [
         (0x08, command_packet(CLEAR_ERROR)),
+        refresh_packet(0x08),
         control_mode_packet(0x08, MODE_POS_FORCE),
     ]
 

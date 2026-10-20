@@ -7,6 +7,7 @@ inverse kinematics from the URDF returned by ``get_kinematics`` and calls
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar, Mapping, Sequence
@@ -23,7 +24,14 @@ from viam.utils import ValueTypes, struct_to_dict
 
 from openarm_viam import description as model
 from openarm_viam.can.bus import CanSession, Motor, acquire, release
-from openarm_viam.models.motion import Motion, feedback_timeout, operation_from, wait_for_enable, wait_until
+from openarm_viam.models.motion import (
+    FEEDBACK_TIMEOUT_S,
+    Motion,
+    feedback_timeout,
+    operation_from,
+    wait_for_enable,
+    wait_until,
+)
 
 
 class _ArmBase(Arm):
@@ -32,6 +40,7 @@ class _ArmBase(Arm):
         self.side = "right"
         self.positions = [0.0] * model.ARM_JOINTS
         self.motion = Motion()
+        self.speed_scale = 1.0
         self.command_speeds = list(model.ARM_SPEEDS)
         self.kinematics = model.arm_urdf(self.side).encode("utf-8")
 
@@ -39,6 +48,13 @@ class _ArmBase(Arm):
         self.side = model.side_name(side)
         self.kinematics = model.arm_urdf(self.side).encode("utf-8")
         self.positions = model.clamp_arm(self.side, self.positions)
+
+    def _apply_speed_scale(self, attributes: Mapping[str, Any]) -> None:
+        scale = float(attributes.get("speed_scale", 1.0))
+        if scale <= 0:
+            raise ValueError("speed_scale must be positive")
+        self.speed_scale = scale
+        self.command_speeds = [speed * scale for speed in model.ARM_SPEEDS]
 
     async def get_end_position(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> Pose:
         position, orientation = model.forward_kinematics(self.side, self.positions)
@@ -156,6 +172,43 @@ class _ArmBase(Arm):
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         self.motion.cancel()
 
+    async def do_command(
+        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
+    ) -> Mapping[str, ValueTypes]:
+        name = command.get("command")
+        if name == "move_to_neutral":
+            return await self._move_to_neutral(command, timeout=timeout, **kwargs)
+        if name == "power_off":
+            await self._power_off()
+            return {"ok": True, "command": "power_off"}
+        raise ValueError("unsupported DoCommand; use command='move_to_neutral' or command='power_off'")
+
+    async def _move_to_neutral(
+        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
+    ) -> Mapping[str, ValueTypes]:
+        scale = float(command.get("speed_scale", model.NEUTRAL_SPEED_SCALE))
+        if scale <= 0:
+            raise ValueError("speed_scale must be positive")
+        previous = self.command_speeds
+        self.command_speeds = [speed * scale for speed in previous]
+        try:
+            await self.move_to_joint_positions(
+                JointPositions(values=[math.degrees(value) for value in model.NEUTRAL_POSITION_RAD]),
+                timeout=timeout,
+                **kwargs,
+            )
+        finally:
+            self.command_speeds = previous
+        return {
+            "ok": True,
+            "command": "move_to_neutral",
+            "joints_degrees": [math.degrees(value) for value in self.positions],
+            "speed_scale": scale,
+        }
+
+    async def _power_off(self) -> None:
+        self.motion.cancel()
+
 
 class FakeArm(_ArmBase, EasyResource):
     """Same kinematics and joint streaming as the hardware arm, with no CAN socket."""
@@ -174,7 +227,9 @@ class FakeArm(_ArmBase, EasyResource):
         return [], []
 
     def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
-        self._apply_side(_require_side(struct_to_dict(config.attributes)))
+        attributes = struct_to_dict(config.attributes)
+        self._apply_side(_require_side(attributes))
+        self._apply_speed_scale(attributes)
 
 
 class OpenArm(_ArmBase, EasyResource):
@@ -186,10 +241,16 @@ class OpenArm(_ArmBase, EasyResource):
         super().__init__(name)
         self.interface = ""
         self.gain_scale = 1.0
+        self.hold_gain_scale = model.HOLD_GAIN_SCALE
+        self.settle_gain = model.SETTLE_GAIN
+        self.settle_passes = model.SETTLE_PASSES
         self.kp = list(model.ARM_KP)
         self.kd = list(model.ARM_KD)
         self.session: CanSession | None = None
         self.send_ids = list(model.SEND_IDS[: model.ARM_JOINTS])
+        self._servo_goal: list[float] | None = None
+        self._hold_bias: list[float] = [0.0] * model.ARM_JOINTS
+        self.velocities = [0.0] * model.ARM_JOINTS
 
     @classmethod
     def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
@@ -206,8 +267,23 @@ class OpenArm(_ArmBase, EasyResource):
         self.close_hardware()
         attributes = _hardware_attributes(struct_to_dict(config.attributes))
         self._apply_side(attributes["side"])
+        self._apply_speed_scale(attributes)
         self.interface = attributes["can_interface"]
         self.gain_scale = float(attributes.get("gain_scale", 1.0))
+        self.hold_gain_scale = float(attributes.get("hold_gain_scale", model.HOLD_GAIN_SCALE))
+        self.settle_gain = float(attributes.get("settle_gain", model.SETTLE_GAIN))
+        if self.settle_gain < 0:
+            raise ValueError("settle_gain must be non-negative")
+        if self.settle_gain > model.SETTLE_GAIN_MAX:
+            self.logger.warning(
+                "settle_gain %.2f is capped at %.2f — higher values make the arm rock",
+                self.settle_gain,
+                model.SETTLE_GAIN_MAX,
+            )
+            self.settle_gain = model.SETTLE_GAIN_MAX
+        self.settle_passes = int(attributes.get("settle_passes", model.SETTLE_PASSES))
+        if self.settle_passes < 0:
+            raise ValueError("settle_passes must be non-negative")
         self.kp = _gains(attributes, "kp", model.ARM_KP)
         self.kd = _gains(attributes, "kd", model.ARM_KD)
         self.session = acquire(self.interface)
@@ -244,7 +320,7 @@ class OpenArm(_ArmBase, EasyResource):
         session.prepare(self.send_ids)
         await wait_until(
             lambda: self._feedback_ready(),
-            1.0,
+            FEEDBACK_TIMEOUT_S,
             feedback_timeout(self.interface, session),
         )
         await wait_for_enable(
@@ -253,23 +329,91 @@ class OpenArm(_ArmBase, EasyResource):
             [(f"joint{index + 1}", send_id) for index, send_id in enumerate(self.send_ids)],
         )
         self._read_feedback()
+        start = list(self.positions)
         goal = model.clamp_arm(self.side, _radians(positions.values))
+        # Joints that are not changing stay at the measured start with higher gains
+        # so gravity does not pull them while another joint moves.
+        holding = model.holding_joints(start, goal)
         operation = operation_from(self, kwargs)
 
         async def update(values):
             if not self.motion.moving:
                 return
-            self.positions = list(values)
-            self._command(values)
+            commanded = [
+                start[index] if holding[index] else value for index, value in enumerate(values)
+            ]
+            self.positions = commanded
+            self._command(commanded, holding)
 
-        self.positions = await self.motion.run(self.positions, goal, self.command_speeds, update, operation)
+        self.positions = await self.motion.run(start, goal, self.command_speeds, update, operation)
+        await self._settle_to_goal(goal, holding, operation)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         await super().stop(extra=extra, timeout=timeout, **kwargs)
-        if self.session is not None:
-            self.session.hold(self.send_ids)
+        if self.session is None:
+            return
+        self._read_feedback()
+        # Freeze at the measured pose; do not servo back toward a pre-stop goal.
+        self._servo_goal = list(self.positions)
+        self._hold_bias = [0.0] * model.ARM_JOINTS
+        self._command(self._servo_goal)
+
+    async def _power_off(self) -> None:
+        self.motion.cancel()
+        session = self.session
+        if session is None:
+            return
+        self._read_feedback()
+        self._servo_goal = None
+        self._hold_bias = [0.0] * model.ARM_JOINTS
+        session.disable(self.send_ids)
+
+    async def _settle_to_goal(
+        self, goal: Sequence[float], holding: Sequence[bool], operation: Any
+    ) -> None:
+        """Drive measured pose to the goal using still-gated bias updates, then freeze.
+
+        Each pass waits until the arm is nearly still, reads encoders, and nudges a
+        frozen gravity bias by ``settle_gain * (goal - measured)``. That corrects
+        both short and long finishes. When every joint is within ``SETTLE_EPS``,
+        or passes are exhausted, the last bias is frozen — no live high-rate trim.
+        """
+
+        self._servo_goal = list(goal)
+        self._hold_bias = [0.0] * len(goal)
+        if self.settle_gain <= 0 or self.settle_passes <= 0:
+            self._command(goal, holding)
+            self._read_feedback()
+            return
+
+        for _ in range(self.settle_passes):
+            if not await self._wait_nearly_still(operation):
+                return
+            self._read_feedback()
+            errors = [desired - current for desired, current in zip(goal, self.positions)]
+            if max(abs(error) for error in errors) <= model.SETTLE_EPS_RAD:
+                break
+            self._hold_bias = model.accumulate_hold_bias(
+                self._hold_bias, goal, self.positions, self.settle_gain
+            )
+            self._command([desired + bias for desired, bias in zip(goal, self._hold_bias)], holding)
+        self._read_feedback()
+
+    async def _wait_nearly_still(self, operation: Any) -> bool:
+        await asyncio.sleep(model.SETTLE_PAUSE_S)
+        deadline = asyncio.get_running_loop().time() + model.SETTLE_STILL_TIMEOUT_S
+        while asyncio.get_running_loop().time() < deadline:
+            if await operation.is_cancelled():
+                return False
+            self._read_feedback()
+            if max(abs(velocity) for velocity in self.velocities) <= model.SETTLE_STILL_VEL_RAD_S:
+                return True
+            await asyncio.sleep(0.02)
+        return True
 
     def close_hardware(self) -> None:
+        self._servo_goal = None
+        self._hold_bias = [0.0] * model.ARM_JOINTS
         session = self.session
         self.session = None
         if session is None:
@@ -298,17 +442,21 @@ class OpenArm(_ArmBase, EasyResource):
         if session is None or not self._feedback_ready():
             return
         motor_positions = [session.measured(send_id) or 0.0 for send_id in self.send_ids]
+        self.velocities = [session.velocity(send_id) for send_id in self.send_ids]
         self.positions = model.clamp_arm(self.side, model.kinematic_from_motor(self.side, motor_positions))
 
-    def _command(self, kinematic: Sequence[float]) -> None:
+    def _command(self, kinematic: Sequence[float], holding: Sequence[bool] | None = None) -> None:
         session = self._session()
         motor_positions = model.motor_from_kinematic(self.side, kinematic)
         for index, send_id in enumerate(self.send_ids):
+            scale = self.gain_scale
+            if holding is not None and holding[index]:
+                scale *= self.hold_gain_scale
             session.set_target(
                 send_id,
                 motor_positions[index],
-                self.kp[index] * self.gain_scale,
-                self.kd[index] * self.gain_scale,
+                self.kp[index] * scale,
+                self.kd[index] * scale,
             )
 
 

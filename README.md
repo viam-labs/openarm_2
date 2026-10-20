@@ -21,12 +21,31 @@ Attributes:
 | --- | --- | --- |
 | `side` | yes | `left` or `right` |
 | `can_interface` | hardware only | SocketCAN name, usually `can0` for the right arm and `can1` for the left |
-| `gain_scale` | no | Multiplier on the MIT gains. Default `1.0` |
-| `kp`, `kd` | no | Seven MIT gains. Defaults are the OpenArm driver values |
+| `speed_scale` | no | Multiplier on the default joint streaming speeds. Default `1.0`. Try `1.5`–`2.0` if jogs feel slow |
+| `gain_scale` | no | Multiplier on the MIT gains. Default `1.0`. Lower this (for example `0.7`) if motors buzz |
+| `hold_gain_scale` | no | Extra multiplier for joints that are not changing in the current move. Default `1.15` |
+| `settle_gain` | no | Still-gated bias step: `bias += settle_gain*(goal-measured)` until within ~0.2°. Default `0.55`, max `1.0`. Set `0` to disable |
+| `settle_passes` | no | Max still-sampled corrections after a move. Default `8` |
+| `kp`, `kd` | no | Seven MIT gains. Defaults balance gravity hold against buzzing |
 
-Joint commands use Viam's degree units. The module converts those to the URDF's radians before applying motor offsets. The first move clears latched motor faults and enables the motors. If a motor does not report enabled within two seconds, the move fails and lists each joint's state, for example `joint3=undervoltage`. `stop` cancels the trajectory and holds. Closing the component disables its motors.
+Joint commands use Viam's degree units. The module converts those to the URDF's radians before applying motor offsets. Moves use a cosine ease-in/out, then a still-gated settle that reads encoders and nudges a frozen gravity bias until measured joints are within about 0.2° of the goal (or `settle_passes` is exhausted). That corrects both short and long finishes without the live high-rate trim that caused rocking. If a pose buzzes, lower `gain_scale` or `hold_gain_scale`. The first move clears latched motor faults and enables the motors. If a motor does not report enabled within two seconds, the move fails and lists each joint's state, for example `joint3=undervoltage`. `stop` cancels the trajectory and holds. Closing the component disables its motors.
 
 `move_to_position` is not implemented. Send a pose goal through the motion service. The service reads `get_kinematics` and calls `move_to_joint_positions`.
+
+DoCommands:
+
+| Command | Args | Description |
+| --- | --- | --- |
+| `move_to_neutral` | optional `speed_scale` | Joint-space move to URDF zero (all joints `0`). Default speed is `0.35`× the configured joint speeds. Not collision-checked by the motion service |
+| `power_off` | none | Cancel any move and disable this arm's motors. The next joint command re-enables them |
+
+```json
+{"command": "move_to_neutral"}
+{"command": "move_to_neutral", "speed_scale": 0.2}
+{"command": "power_off"}
+```
+
+Call `power_off` on the gripper as well if that motor should also torque-off.
 
 ### Gripper
 
@@ -37,6 +56,8 @@ The gripper uses motor `0x08` (a DM3507) on the arm's CAN interface, so the arm 
 | `side` | yes | `left` or `right` |
 | `can_interface` | hardware only | Same interface as that side's arm |
 | `arm` | no | Arm component name. Returned as a dependency so the arm starts first |
+
+DoCommand `power_off` cancels any move and disables the gripper motor. The next open/grab re-enables it.
 
 ### Fake models
 
@@ -82,7 +103,7 @@ The fragments install registry module `viam-labs:openarm-2`. For a local checkou
 
 ## Safety
 
-Keep an emergency stop within reach, keep the workspace clear, and know how to cut power. Gains start from the published OpenArm driver defaults. Use `gain_scale` below `1` the first time you enable a new arm, then raise it only after a small move looks right. A large position step at full gain can produce a fast motion.
+Keep an emergency stop within reach, keep the workspace clear, and know how to cut power. Gains start from the published OpenArm driver defaults. Use `gain_scale` below `1` the first time you enable a new arm, then raise it only after a small move looks right. A large position step at full gain can produce a fast motion. Joints that are not part of a move are held at their measured start with `hold_gain_scale` so gravity does not pull them while another joint moves.
 
 Motors stay disabled until the first joint or gripper command. That command enables them and holds the measured pose until the trajectory starts, so the arm is not commanded to the URDF zero just because the module started. If the arm is unplugged or powered off, the next move clears stale state, reopens the CAN socket if needed, and re-enables the motors — no module restart required. A motor LED that turns green and then red means it stopped hearing CAN. `restart-ms 100` brings the interface back after a bus-off.
 

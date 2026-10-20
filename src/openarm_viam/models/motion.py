@@ -12,6 +12,7 @@ from openarm_viam.can.damiao import status_name
 from openarm_viam.trajectory import stream_joints
 
 ENABLE_TIMEOUT_S = 2.0
+FEEDBACK_TIMEOUT_S = 2.0
 
 Update = Callable[[Sequence[float]], Awaitable[None]]
 

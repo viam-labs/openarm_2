@@ -44,12 +44,35 @@ _LIMITS = (
 )
 _EFFORT = (40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0)
 
-# Per-joint speed caps from the OpenArm driver, in rad/s.
-ARM_SPEEDS = (1.8, 1.8, 3.3, 2.3, 3.5, 3.5, 3.5)
+# Soft default streaming speeds (rad/s). Multiply with the speed_scale attribute.
+ARM_SPEEDS = (0.55, 0.55, 0.8, 0.65, 1.0, 1.0, 1.0)
+# Hardware rate caps written into the URDF for motion planning.
+ARM_MAX_SPEEDS = (1.8, 1.8, 3.3, 2.3, 3.5, 3.5, 3.5)
+# URDF home used by the move_to_neutral DoCommand (joint-space, not motion-planned).
+NEUTRAL_POSITION_RAD = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+# Extra multiplier on the configured joint speeds for a careful move_to_neutral.
+NEUTRAL_SPEED_SCALE = 0.35
 
-# MIT gains from the OpenArm driver and ROS 2 hardware interface. gain_scale multiplies both.
-ARM_KP = (70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0)
-ARM_KD = (2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5)
+# MIT gains. Stiffer than the ROS defaults for gravity hold, softer and more
+# damped than the raw OpenArm driver values to avoid pose-dependent buzzing.
+ARM_KP = (140.0, 140.0, 120.0, 120.0, 22.0, 22.0, 22.0)
+ARM_KD = (3.2, 3.2, 2.8, 2.8, 1.6, 1.6, 1.6)
+# Extra stiffness for joints that are not part of the current move.
+HOLD_GAIN_SCALE = 1.15
+# Joints whose goal is within this many radians of the start are treated as holds.
+HOLD_EPSILON_RAD = 1e-3
+# After the trajectory, close the loop on measured pose while the arm is still:
+# bias += settle_gain * (goal - measured), command goal + bias, repeat until
+# within SETTLE_EPS or max passes, then freeze. Updates only when nearly still
+# so this is not the live high-rate outer loop that rocked the arm.
+SETTLE_GAIN = 0.55
+SETTLE_GAIN_MAX = 1.0
+SETTLE_PASSES = 8
+SETTLE_EPS_RAD = math.radians(0.2)
+SETTLE_PAUSE_S = 0.12
+SETTLE_STILL_VEL_RAD_S = 0.025
+SETTLE_STILL_TIMEOUT_S = 0.6
+SETTLE_MAX_BIAS_RAD = math.radians(8.0)
 # Position-force limits from the OpenArm driver. Torque is a fraction of the 4.5 Nm motor rating.
 GRIPPER_POS_SPEED = 50.0
 GRIPPER_POS_TORQUE = 1.0 / 4.5
@@ -148,7 +171,7 @@ def arm_joints(side: str) -> tuple[JointSpec, ...]:
                 lower=lower,
                 upper=upper,
                 effort=_EFFORT[index],
-                velocity=ARM_SPEEDS[index],
+                velocity=ARM_MAX_SPEEDS[index],
             )
         )
     return tuple(specs)
@@ -159,6 +182,47 @@ def clamp_arm(side: str, values: Sequence[float]) -> list[float]:
     if len(values) != len(specs):
         raise ValueError(f"arm expects {len(specs)} joint positions, got {len(values)}")
     return [min(spec.upper, max(spec.lower, value)) for spec, value in zip(specs, values)]
+
+
+def holding_joints(
+    start: Sequence[float], goal: Sequence[float], epsilon: float = HOLD_EPSILON_RAD
+) -> list[bool]:
+    """True for each joint whose goal matches the start within ``epsilon`` radians."""
+
+    if len(start) != len(goal):
+        raise ValueError("start and goal must have the same length")
+    return [abs(current - desired) <= epsilon for current, desired in zip(start, goal)]
+
+
+def settle_targets(
+    goal: Sequence[float],
+    measured: Sequence[float],
+    settle_gain: float,
+    holding: Sequence[bool] | None = None,
+) -> list[float]:
+    """Command ``goal + settle_gain * (goal - measured)`` (capped)."""
+
+    bias = accumulate_hold_bias([0.0] * len(goal), goal, measured, settle_gain)
+    _ = holding
+    return [desired + offset for desired, offset in zip(goal, bias)]
+
+
+def accumulate_hold_bias(
+    bias: Sequence[float],
+    goal: Sequence[float],
+    measured: Sequence[float],
+    settle_gain: float,
+) -> list[float]:
+    """Add ``settle_gain * (goal - measured)`` onto an existing frozen bias."""
+
+    if len(goal) != len(measured) or len(bias) != len(goal):
+        raise ValueError("bias, goal, and measured must have the same length")
+    updated = []
+    for offset, desired, current in zip(bias, goal, measured):
+        next_bias = offset + settle_gain * (desired - current)
+        next_bias = max(-SETTLE_MAX_BIAS_RAD, min(SETTLE_MAX_BIAS_RAD, next_bias))
+        updated.append(next_bias)
+    return updated
 
 
 def motor_from_kinematic(side: str, kinematic: Sequence[float]) -> list[float]:

@@ -103,7 +103,9 @@ def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
         if motor.configure_cycles >= CONFIGURE_CYCLES:
             motor.mode = "enable"
             motor.enable_cycles = 0
-        frames = [(motor.send_id, command_packet(CLEAR_ERROR))]
+        # Clear-error alone may not produce a state frame. Always poll too so
+        # wait_until(feedback) can succeed after a fault or power glitch.
+        frames = [(motor.send_id, command_packet(CLEAR_ERROR)), refresh_packet(motor.send_id)]
         if motor.control == "posforce":
             frames.append(control_mode_packet(motor.send_id, MODE_POS_FORCE))
         return frames
@@ -114,9 +116,11 @@ def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
             if not motor.has_target:
                 motor.target = motor.measured
             motor.mode = "mit"
-        elif motor.enable_cycles % 20 == 0:
-            return [(motor.send_id, command_packet(CLEAR_ERROR))]
-        return [(motor.send_id, command_packet(ENABLE))]
+        frames = [(motor.send_id, command_packet(ENABLE))]
+        if motor.measured is None or motor.enable_cycles % 20 == 0:
+            frames.insert(0, (motor.send_id, command_packet(CLEAR_ERROR)))
+            frames.append(refresh_packet(motor.send_id))
+        return frames
     if motor.mode == "mit":
         if motor.control == "posforce":
             return [(motor.send_id + 0x300, posforce_packet(motor.target, motor.speed, motor.torque_pu))]
@@ -234,6 +238,11 @@ class CanSession:
         with self._lock:
             motor = self.motors.get(send_id)
             return None if motor is None else motor.measured
+
+    def velocity(self, send_id: int) -> float:
+        with self._lock:
+            motor = self.motors.get(send_id)
+            return 0.0 if motor is None else motor.velocity
 
     def status(self, send_id: int) -> int | None:
         with self._lock:

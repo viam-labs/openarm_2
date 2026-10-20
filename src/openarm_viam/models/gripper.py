@@ -20,7 +20,14 @@ from viam.utils import ValueTypes, struct_to_dict
 
 from openarm_viam import description as model
 from openarm_viam.can.bus import CanSession, Motor, acquire, release
-from openarm_viam.models.motion import Motion, feedback_timeout, operation_from, wait_for_enable, wait_until
+from openarm_viam.models.motion import (
+    FEEDBACK_TIMEOUT_S,
+    Motion,
+    feedback_timeout,
+    operation_from,
+    wait_for_enable,
+    wait_until,
+)
 
 _OPEN_INPUT = [model.GRIPPER_OPEN]
 _CLOSED_INPUT = [model.GRIPPER_CLOSED]
@@ -80,6 +87,18 @@ class _GripperBase(Gripper):
         await self.motion.run([self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+        self.motion.cancel()
+
+    async def do_command(
+        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
+    ) -> Mapping[str, ValueTypes]:
+        name = command.get("command")
+        if name == "power_off":
+            await self._power_off()
+            return {"ok": True, "command": "power_off"}
+        raise ValueError("unsupported DoCommand; use command='power_off'")
+
+    async def _power_off(self) -> None:
         self.motion.cancel()
 
     async def get_status(self, *, timeout: float | None = None, **kwargs) -> Mapping[str, ValueTypes]:
@@ -161,7 +180,7 @@ class OpenGripper(_GripperBase, EasyResource):
         session.prepare([self.send_id])
         await wait_until(
             lambda: session.measured(self.send_id) is not None,
-            1.0,
+            FEEDBACK_TIMEOUT_S,
             feedback_timeout(self.interface, session),
         )
         await wait_for_enable(self.interface, session, [("gripper", self.send_id)])
@@ -182,6 +201,13 @@ class OpenGripper(_GripperBase, EasyResource):
         await super().stop(extra=extra, timeout=timeout, **kwargs)
         if self.session is not None:
             self.session.hold([self.send_id])
+
+    async def _power_off(self) -> None:
+        self.motion.cancel()
+        session = self.session
+        if session is None:
+            return
+        session.disable([self.send_id])
 
     def close_hardware(self) -> None:
         session = self.session
