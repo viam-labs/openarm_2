@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import socket
 import struct
@@ -27,10 +28,23 @@ LOGGER = logging.getLogger(__name__)
 CONTROL_PERIOD_S = 0.01
 CONFIGURE_CYCLES = 3
 ENABLE_CYCLES = 5
+# No reply for this long means the arm was unplugged or powered off.
+FEEDBACK_TIMEOUT_S = 0.25
+SOCKET_REOPEN_COOLDOWN_S = 1.0
 CANFD_MTU = 72
 CAN_MTU = 16
 CANFD_BRS = 0x01
 CAN_ERR_FLAG = 0x20000000
+_SOCKET_DEAD = frozenset(
+    {
+        errno.ENETDOWN,
+        errno.ENODEV,
+        errno.ENETUNREACH,
+        errno.ENXIO,
+        errno.ENOENT,
+        errno.EBADF,
+    }
+)
 _CAN_ERRORS = (
     (0x00000001, "tx-timeout"),
     (0x00000004, "controller"),
@@ -59,6 +73,19 @@ class Motor:
     velocity: float = 0.0
     torque: float = 0.0
     error: int | None = None
+    last_rx: float | None = None
+
+
+def reset_motor(motor: Motor) -> None:
+    """Forget stale feedback and go back to polling after a disconnect."""
+
+    motor.mode = "refresh"
+    motor.configure_cycles = 0
+    motor.enable_cycles = 0
+    motor.measured = None
+    motor.error = None
+    motor.last_rx = None
+    motor.has_target = False
 
 
 def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
@@ -175,6 +202,8 @@ class CanSession:
     rx_other: int = 0
     other_ids: set[int] = field(default_factory=set)
     fd: bool = True
+    _reopen: bool = False
+    _last_reopen: float = 0.0
 
     def start(self) -> None:
         self.fd = interface_supports_fd(self.interface)
@@ -187,11 +216,8 @@ class CanSession:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
-        raw = self._socket
-        self._socket = None
-        if raw is not None:
-            raw.close()
-        LOGGER.info("closed CAN-FD session on %s", self.interface)
+        self._close_socket()
+        LOGGER.info("closed CAN session on %s", self.interface)
 
     def add_motor(self, motor: Motor) -> None:
         with self._lock:
@@ -234,25 +260,38 @@ class CanSession:
             motor.has_target = True
             # A trajectory updates the target every cycle. Only the first update
             # leaves refresh/idle; resetting the counters here would never finish enabling.
-            if motor.mode in ("refresh", "idle"):
+            if motor.mode not in ("configure", "enable", "mit"):
                 motor.mode = "configure"
                 motor.configure_cycles = 0
+                motor.enable_cycles = 0
 
     def prepare(self, send_ids: list[int]) -> None:
         """Start enabling before the first feedback sample.
 
-        A move used to wait for a reply while the motors were only refreshed.
-        Damiao motors go green, then red, when that stream never becomes an
-        enable followed by a held position. Position commands stay at the
-        measured angle until a target is set, so this does not drive toward zero.
+        After an unplug, motors can still be marked ``mit`` while they are
+        actually powered off. Re-run clear/enable whenever a motor is not
+        already enabled and answering, and clear stale measurements so the
+        move waits for a live reply.
         """
 
         with self._lock:
             for send_id in send_ids:
                 motor = self.motors.get(send_id)
-                if motor is not None and motor.mode in ("refresh", "idle"):
-                    motor.mode = "configure"
-                    motor.configure_cycles = 0
+                if motor is None:
+                    continue
+                if (
+                    motor.mode == "mit"
+                    and motor.error == STATUS_ENABLED
+                    and motor.measured is not None
+                    and motor.last_rx is not None
+                    and time.monotonic() - motor.last_rx <= FEEDBACK_TIMEOUT_S
+                ):
+                    continue
+                motor.mode = "configure"
+                motor.configure_cycles = 0
+                motor.enable_cycles = 0
+                motor.measured = None
+                motor.error = None
 
     def diagnose(self) -> str:
         with self._lock:
@@ -270,9 +309,10 @@ class CanSession:
             motor = self.motors[send_id]
             motor.target = motor_position
             motor.has_target = True
-            if motor.mode in ("refresh", "idle"):
+            if motor.mode not in ("configure", "enable", "mit"):
                 motor.mode = "configure"
                 motor.configure_cycles = 0
+                motor.enable_cycles = 0
 
     def hold(self, send_ids: list[int]) -> None:
         """Servo to the last measured position instead of the rest of the trajectory."""
@@ -302,6 +342,8 @@ class CanSession:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            if self._reopen:
+                self._reopen_socket()
             started = time.monotonic()
             self._exchange()
             remaining = CONTROL_PERIOD_S - (time.monotonic() - started)
@@ -311,6 +353,7 @@ class CanSession:
     def _exchange(self) -> None:
         raw = self._socket
         if raw is None:
+            self._request_reopen()
             return
         with self._lock:
             outbound = []
@@ -347,6 +390,7 @@ class CanSession:
             state = parse_state(motor_type, data)
             if state is None:
                 continue
+            now = time.monotonic()
             with self._lock:
                 self.rx_ok += 1
                 for motor in self.motors.values():
@@ -355,11 +399,40 @@ class CanSession:
                         motor.velocity = state.velocity
                         motor.torque = state.torque
                         motor.error = state.error
+                        motor.last_rx = now
+                        # Power-cycled motors answer while disabled. Drop back to
+                        # clear/enable instead of keeping an inert MIT stream.
+                        if motor.mode == "mit" and state.error != STATUS_ENABLED:
+                            motor.mode = "configure"
+                            motor.configure_cycles = 0
+                            motor.enable_cycles = 0
                         break
+        self._drop_stale_feedback()
+
+    def _drop_stale_feedback(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            for motor in self.motors.values():
+                if motor.last_rx is None:
+                    continue
+                if now - motor.last_rx <= FEEDBACK_TIMEOUT_S:
+                    continue
+                if motor.mode in ("refresh", "idle"):
+                    motor.measured = None
+                    motor.error = None
+                    motor.last_rx = None
+                    continue
+                LOGGER.warning(
+                    "lost feedback from motor 0x%02x on %s; waiting to re-enable",
+                    motor.send_id,
+                    self.interface,
+                )
+                reset_motor(motor)
 
     def _transmit(self, arbitration_id: int, data: bytes) -> None:
         raw = self._socket
         if raw is None:
+            self._request_reopen()
             return
         try:
             raw.send(pack_canfd(arbitration_id, data) if self.fd else pack_classic(arbitration_id, data))
@@ -374,7 +447,41 @@ class CanSession:
         with self._lock:
             self.tx_errors += 1
             self.last_error = text[:180]
+        code = getattr(exc, "errno", None)
+        if code in _SOCKET_DEAD:
+            self._request_reopen()
         LOGGER.warning("CAN send failed on %s: %s", self.interface, text)
+
+    def _request_reopen(self) -> None:
+        self._reopen = True
+
+    def _close_socket(self) -> None:
+        raw = self._socket
+        self._socket = None
+        if raw is None:
+            return
+        try:
+            raw.close()
+        except OSError:
+            pass
+
+    def _reopen_socket(self) -> None:
+        now = time.monotonic()
+        if now - self._last_reopen < SOCKET_REOPEN_COOLDOWN_S:
+            return
+        self._last_reopen = now
+        self._reopen = False
+        self._close_socket()
+        with self._lock:
+            for motor in self.motors.values():
+                reset_motor(motor)
+        try:
+            self.fd = interface_supports_fd(self.interface)
+            self._socket = open_can_socket(self.interface)
+            LOGGER.info("reopened %s session on %s", "CAN-FD" if self.fd else "classic CAN", self.interface)
+        except OSError as exc:
+            self._reopen = True
+            self._note_error(exc)
 
 
 _SESSIONS: dict[str, CanSession] = {}

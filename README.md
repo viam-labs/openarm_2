@@ -84,7 +84,7 @@ The fragments install registry module `viam-labs:openarm-2`. For a local checkou
 
 Keep an emergency stop within reach, keep the workspace clear, and know how to cut power. Gains start from the published OpenArm driver defaults. Use `gain_scale` below `1` the first time you enable a new arm, then raise it only after a small move looks right. A large position step at full gain can produce a fast motion.
 
-Motors stay disabled until the first joint or gripper command. That command enables them and holds the measured pose until the trajectory starts, so the arm is not commanded to the URDF zero just because the module started. A motor LED that turns green and then red means it stopped hearing CAN. `restart-ms 100` brings the interface back after a bus-off.
+Motors stay disabled until the first joint or gripper command. That command enables them and holds the measured pose until the trajectory starts, so the arm is not commanded to the URDF zero just because the module started. If the arm is unplugged or powered off, the next move clears stale state, reopens the CAN socket if needed, and re-enables the motors — no module restart required. A motor LED that turns green and then red means it stopped hearing CAN. `restart-ms 100` brings the interface back after a bus-off.
 
 ## Development
 
