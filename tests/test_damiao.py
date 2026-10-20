@@ -65,18 +65,16 @@ def test_control_mode_and_posforce_frames_match_the_openarm_layout():
     assert torque == int((1.0 / 4.5) * 10000)
 
 
-def test_arm_motor_clears_faults_then_holds_measured_position_once_enabled():
+def test_arm_motor_enables_then_holds_measured_position():
     from openarm_viam.can.damiao import refresh_packet
 
     motor = Motor("DM4310", 0x01, 0x11, mode="configure")
     for _ in range(3):
-        assert commands_for(motor) == [(0x01, command_packet(CLEAR_ERROR)), refresh_packet(0x01)]
+        assert commands_for(motor) == [refresh_packet(0x01)]
     assert motor.mode == "enable"
-    # No measured yet: enable also clears and polls.
+    # No measured yet: enable also polls.
     frames = commands_for(motor)
-    assert frames[0] == (0x01, command_packet(CLEAR_ERROR))
-    assert frames[1] == (0x01, command_packet(ENABLE))
-    assert frames[2] == refresh_packet(0x01)
+    assert frames == [(0x01, command_packet(ENABLE)), refresh_packet(0x01)]
     for _ in range(ENABLE_CYCLES - 1):
         commands_for(motor)
     motor.measured = 0.4
@@ -84,10 +82,21 @@ def test_arm_motor_clears_faults_then_holds_measured_position_once_enabled():
     commands_for(motor)
     assert motor.mode == "enable"
     motor.error = STATUS_ENABLED
-    assert commands_for(motor) == [(0x01, command_packet(ENABLE))]
+    # Last enable cycle also streams an MIT hold so the joint does not go limp.
+    hold = mit_packet("DM4310", 0.4, 0.0, 0.0, 0.0, 0.0)
+    assert commands_for(motor) == [(0x01, command_packet(ENABLE)), (0x01, hold)]
     assert motor.mode == "mit"
     assert motor.target == pytest.approx(0.4)
-    assert commands_for(motor) == [(0x01, mit_packet("DM4310", 0.4, 0.0, 0.0, 0.0, 0.0))]
+    assert commands_for(motor) == [(0x01, hold)]
+
+
+def test_configure_clears_only_when_faulted():
+    from openarm_viam.can.damiao import refresh_packet
+
+    motor = Motor("DM4310", 0x01, 0x11, mode="configure", error=0xD)
+    frames = commands_for(motor)
+    assert frames[0] == (0x01, command_packet(CLEAR_ERROR))
+    assert frames[1] == refresh_packet(0x01)
 
 
 def test_gripper_sets_position_force_mode_before_enabling():
@@ -95,7 +104,6 @@ def test_gripper_sets_position_force_mode_before_enabling():
 
     motor = Motor("DM3507", 0x08, 0x18, mode="configure", control="posforce")
     assert commands_for(motor) == [
-        (0x08, command_packet(CLEAR_ERROR)),
         refresh_packet(0x08),
         control_mode_packet(0x08, MODE_POS_FORCE),
     ]

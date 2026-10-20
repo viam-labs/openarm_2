@@ -1,3 +1,4 @@
+import math
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -61,8 +62,27 @@ def test_accumulate_hold_bias_stacks_and_can_unwind_overshoot():
     assert bias == pytest.approx([0.044])
 
 
-def test_settle_gain_max_is_at_most_one():
-    assert model.SETTLE_GAIN <= model.SETTLE_GAIN_MAX <= 1.0
+def test_accumulate_hold_bias_skips_moved_joints():
+    goal = [0.0, 0.5]
+    measured = [0.1, 0.4]
+    bias = model.accumulate_hold_bias([0.0, 0.0], goal, measured, 1.0, [True, False])
+    assert bias == pytest.approx([-0.1, 0.0])
+
+
+def test_holding_needs_settle_ignores_moved_joint_error():
+    goal = [0.0, 0.0, 0.4]
+    measured = [0.0, 0.0, 0.4 - math.radians(3.0)]
+    holding = [True, True, False]
+    assert model.holding_needs_settle(goal, measured, holding) is False
+    measured_droop = [0.0, -math.radians(2.0), measured[2]]
+    assert model.holding_needs_settle(goal, measured_droop, holding) is True
+    assert model.holding_on_target(goal, [0.0, 0.0, measured[2]], holding) is True
+
+
+def test_settle_gain_defaults_off():
+    assert model.SETTLE_GAIN == 0.0
+    assert model.SETTLE_GAIN_MAX <= 1.0
+    assert model.SETTLE_TRIGGER_EPS_RAD > model.SETTLE_EPS_RAD
 
 
 def test_gripper_open_amount_round_trip():

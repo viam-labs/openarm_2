@@ -15,9 +15,11 @@ from openarm_viam.can.damiao import (
     DISABLE,
     ENABLE,
     MODE_POS_FORCE,
+    STATUS_DISABLED,
     STATUS_ENABLED,
     command_packet,
     control_mode_packet,
+    is_fault,
     mit_packet,
     parse_state,
     posforce_packet,
@@ -29,12 +31,17 @@ CONTROL_PERIOD_S = 0.01
 CONFIGURE_CYCLES = 3
 ENABLE_CYCLES = 5
 # No reply for this long means the arm was unplugged or powered off.
+# Used for first-boot waits and refresh polling — not for interrupting MIT holds.
 FEEDBACK_TIMEOUT_S = 0.25
+# How long a holding motor may miss RX before we only log (MIT keeps running).
+HOLD_FEEDBACK_WARN_S = 1.0
 SOCKET_REOPEN_COOLDOWN_S = 1.0
 CANFD_MTU = 72
 CAN_MTU = 16
 CANFD_BRS = 0x01
 CAN_ERR_FLAG = 0x20000000
+# Receive window after TX. Seven MIT frames need more than a few milliseconds.
+RX_WINDOW_S = 0.008
 _SOCKET_DEAD = frozenset(
     {
         errno.ENETDOWN,
@@ -77,15 +84,38 @@ class Motor:
 
 
 def reset_motor(motor: Motor) -> None:
-    """Forget stale feedback and go back to polling after a disconnect."""
+    """Forget stale feedback after a disconnect, but keep any hold target.
 
-    motor.mode = "refresh"
+    Dropping to ``refresh`` without a target stops the MIT stream and the joint
+    goes limp. If we were already commanding a pose, re-enter clear/enable while
+    keeping that target so ``commands_for`` can keep holding torque.
+    """
+
     motor.configure_cycles = 0
     motor.enable_cycles = 0
     motor.measured = None
     motor.error = None
     motor.last_rx = None
-    motor.has_target = False
+    if motor.has_target:
+        motor.mode = "configure"
+    else:
+        motor.mode = "refresh"
+        motor.has_target = False
+
+
+def _hold_frames(motor: Motor) -> list[tuple[int, bytes]]:
+    """MIT/posforce hold frames. Sent during clear/enable too so joints do not drop."""
+
+    if not motor.has_target:
+        return []
+    if motor.control == "posforce":
+        return [(motor.send_id + 0x300, posforce_packet(motor.target, motor.speed, motor.torque_pu))]
+    return [
+        (
+            motor.send_id,
+            mit_packet(motor.motor_type, motor.target, 0.0, motor.kp, motor.kd, 0.0),
+        )
+    ]
 
 
 def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
@@ -94,8 +124,11 @@ def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
     A latched fault (for example communication lost) makes the motor ignore
     enable while it still answers status requests, so faults are cleared
     first. Only the position-force gripper gets a control-mode write, as in
-    the OpenArm driver. Enable repeats until the motor reports it is enabled;
-    position commands start from the measured angle.
+    the OpenArm driver. Enable repeats until the motor reports it is enabled.
+
+    While clearing or enabling, keep streaming the last MIT/posforce target.
+    Damiao motors lose torque within a cycle of MIT silence — that looked like
+    joint 1 briefly losing power whenever a move re-ran prepare/enable.
     """
 
     if motor.mode == "configure":
@@ -103,11 +136,16 @@ def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
         if motor.configure_cycles >= CONFIGURE_CYCLES:
             motor.mode = "enable"
             motor.enable_cycles = 0
-        # Clear-error alone may not produce a state frame. Always poll too so
-        # wait_until(feedback) can succeed after a fault or power glitch.
-        frames = [(motor.send_id, command_packet(CLEAR_ERROR)), refresh_packet(motor.send_id)]
+        # Only CLEAR when a latched fault is present. Spamming CLEAR_ERROR on a
+        # healthy DM8009 interrupts torque even if MIT frames follow in the same
+        # cycle — that looked like joint 1 briefly losing power.
+        frames: list[tuple[int, bytes]] = []
+        if is_fault(motor.error):
+            frames.append((motor.send_id, command_packet(CLEAR_ERROR)))
+        frames.append(refresh_packet(motor.send_id))
         if motor.control == "posforce":
             frames.append(control_mode_packet(motor.send_id, MODE_POS_FORCE))
+        frames.extend(_hold_frames(motor))
         return frames
     if motor.mode == "enable":
         motor.enable_cycles += 1
@@ -115,16 +153,18 @@ def commands_for(motor: Motor) -> list[tuple[int, bytes]]:
         if ready and motor.error == STATUS_ENABLED:
             if not motor.has_target:
                 motor.target = motor.measured
+                motor.has_target = True
             motor.mode = "mit"
         frames = [(motor.send_id, command_packet(ENABLE))]
-        if motor.measured is None or motor.enable_cycles % 20 == 0:
+        if motor.measured is None:
+            frames.append(refresh_packet(motor.send_id))
+        elif is_fault(motor.error) and motor.enable_cycles % 20 == 0:
             frames.insert(0, (motor.send_id, command_packet(CLEAR_ERROR)))
             frames.append(refresh_packet(motor.send_id))
+        frames.extend(_hold_frames(motor))
         return frames
     if motor.mode == "mit":
-        if motor.control == "posforce":
-            return [(motor.send_id + 0x300, posforce_packet(motor.target, motor.speed, motor.torque_pu))]
-        return [(motor.send_id, mit_packet(motor.motor_type, motor.target, 0.0, motor.kp, motor.kd, 0.0))]
+        return _hold_frames(motor)
     if motor.mode == "disable":
         motor.mode = "idle"
         return [(motor.send_id, command_packet(DISABLE))]
@@ -275,12 +315,12 @@ class CanSession:
                 motor.enable_cycles = 0
 
     def prepare(self, send_ids: list[int]) -> None:
-        """Start enabling before the first feedback sample.
+        """Start enabling motors that are not already holding.
 
-        After an unplug, motors can still be marked ``mit`` while they are
-        actually powered off. Re-run clear/enable whenever a motor is not
-        already enabled and answering, and clear stale measurements so the
-        move waits for a live reply.
+        A motor in ``mit`` with a target must not be kicked into CLEAR/enable
+        just because one feedback frame was late — that interrupts DM8009 torque
+        and the base joint drops. Only recover when the motor reports disabled
+        or a latched fault, or when it was never commanded.
         """
 
         with self._lock:
@@ -288,19 +328,27 @@ class CanSession:
                 motor = self.motors.get(send_id)
                 if motor is None:
                     continue
-                if (
-                    motor.mode == "mit"
-                    and motor.error == STATUS_ENABLED
-                    and motor.measured is not None
-                    and motor.last_rx is not None
-                    and time.monotonic() - motor.last_rx <= FEEDBACK_TIMEOUT_S
-                ):
+                if motor.mode in ("configure", "enable"):
                     continue
+                if motor.mode == "mit" and motor.has_target:
+                    if motor.error == STATUS_ENABLED or motor.error is None:
+                        continue
+                    if motor.error == STATUS_DISABLED:
+                        motor.mode = "enable"
+                        motor.enable_cycles = 0
+                        continue
+                    if is_fault(motor.error):
+                        motor.mode = "configure"
+                        motor.configure_cycles = 0
+                        motor.enable_cycles = 0
+                        motor.measured = None
+                        continue
+                    continue
+                # First boot / refresh / idle — clear only if a fault is latched.
                 motor.mode = "configure"
                 motor.configure_cycles = 0
                 motor.enable_cycles = 0
                 motor.measured = None
-                motor.error = None
 
     def diagnose(self) -> str:
         with self._lock:
@@ -371,7 +419,7 @@ class CanSession:
             recv_types = {motor.recv_id: motor.motor_type for motor in self.motors.values()}
         for arbitration_id, data in outbound:
             self._transmit(arbitration_id, data)
-        deadline = time.monotonic() + 0.006
+        deadline = time.monotonic() + RX_WINDOW_S
         while time.monotonic() < deadline:
             try:
                 received = raw.recv(CANFD_MTU)
@@ -409,12 +457,25 @@ class CanSession:
                         motor.torque = state.torque
                         motor.error = state.error
                         motor.last_rx = now
-                        # Power-cycled motors answer while disabled. Drop back to
-                        # clear/enable instead of keeping an inert MIT stream.
+                        # Disabled after power cycle: re-enable while keeping MIT holds.
+                        # Latched faults need clear. LOST_COMM often means we interrupted
+                        # the MIT stream — keep holding and only clear on other faults.
                         if motor.mode == "mit" and state.error != STATUS_ENABLED:
-                            motor.mode = "configure"
-                            motor.configure_cycles = 0
-                            motor.enable_cycles = 0
+                            if state.error == STATUS_DISABLED:
+                                motor.mode = "enable"
+                                motor.enable_cycles = 0
+                            elif is_fault(state.error) and state.error != 0xD:
+                                motor.mode = "configure"
+                                motor.configure_cycles = 0
+                                motor.enable_cycles = 0
+                            elif state.error == 0xD and motor.has_target:
+                                # Communication-lost: resume MIT; do not CLEAR storm.
+                                LOGGER.warning(
+                                    "motor 0x%02x on %s reported communication lost; "
+                                    "keeping MIT hold",
+                                    motor.send_id,
+                                    self.interface,
+                                )
                         break
         self._drop_stale_feedback()
 
@@ -430,6 +491,16 @@ class CanSession:
                     motor.measured = None
                     motor.error = None
                     motor.last_rx = None
+                    continue
+                # Holding motors: never stop the MIT stream for a missed RX. The
+                # base joint falls under gravity if we CLEAR/enable here.
+                if motor.has_target and motor.mode in ("mit", "configure", "enable"):
+                    if now - motor.last_rx >= HOLD_FEEDBACK_WARN_S:
+                        LOGGER.warning(
+                            "lost feedback from motor 0x%02x on %s; keeping MIT hold",
+                            motor.send_id,
+                            self.interface,
+                        )
                     continue
                 LOGGER.warning(
                     "lost feedback from motor 0x%02x on %s; waiting to re-enable",

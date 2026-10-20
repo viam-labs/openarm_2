@@ -59,16 +59,22 @@ ARM_KP = (140.0, 140.0, 120.0, 120.0, 22.0, 22.0, 22.0)
 ARM_KD = (3.2, 3.2, 2.8, 2.8, 1.6, 1.6, 1.6)
 # Extra stiffness for joints that are not part of the current move.
 HOLD_GAIN_SCALE = 1.15
-# Joints whose goal is within this many radians of the start are treated as holds.
+# A requested joint is a hold when it matches the last command, or echoes the
+# current encoder reading (jog clients send back get_joint_positions for joints
+# they are not changing). Held joints keep the last command as their target.
 HOLD_EPSILON_RAD = 1e-3
-# After the trajectory, close the loop on measured pose while the arm is still:
-# bias += settle_gain * (goal - measured), command goal + bias, repeat until
-# within SETTLE_EPS or max passes, then freeze. Updates only when nearly still
-# so this is not the live high-rate outer loop that rocked the arm.
-SETTLE_GAIN = 0.55
+HOLD_ECHO_RAD = math.radians(0.3)
+# After the trajectory, optionally trim gravity droop on joints that were held
+# still during the move. bias += settle_gain * (goal - measured) on those axes
+# only, and only when a held joint is already off by SETTLE_TRIGGER_EPS. The
+# joint that just moved is ignored — its tracking error must not start settle.
+# Off by default: post-move bias trim was snapping held joints and causing
+# end-of-jog drops. Set settle_gain > 0 to opt back in.
+SETTLE_GAIN = 0.0
 SETTLE_GAIN_MAX = 1.0
 SETTLE_PASSES = 8
-SETTLE_EPS_RAD = math.radians(0.2)
+SETTLE_EPS_RAD = math.radians(0.5)
+SETTLE_TRIGGER_EPS_RAD = math.radians(1.5)
 SETTLE_PAUSE_S = 0.12
 SETTLE_STILL_VEL_RAD_S = 0.025
 SETTLE_STILL_TIMEOUT_S = 0.6
@@ -206,9 +212,40 @@ def settle_targets(
 ) -> list[float]:
     """Command ``goal + settle_gain * (goal - measured)`` (capped)."""
 
-    bias = accumulate_hold_bias([0.0] * len(goal), goal, measured, settle_gain)
-    _ = holding
+    bias = accumulate_hold_bias([0.0] * len(goal), goal, measured, settle_gain, holding)
     return [desired + offset for desired, offset in zip(goal, bias)]
+
+
+def holding_needs_settle(
+    goal: Sequence[float],
+    measured: Sequence[float],
+    holding: Sequence[bool],
+    epsilon: float = SETTLE_TRIGGER_EPS_RAD,
+) -> bool:
+    """True when a held joint has drooped by more than ``epsilon`` radians."""
+
+    if len(goal) != len(measured) or len(holding) != len(goal):
+        raise ValueError("goal, measured, and holding must have the same length")
+    for desired, current, is_hold in zip(goal, measured, holding):
+        if is_hold and abs(desired - current) > epsilon:
+            return True
+    return False
+
+
+def holding_on_target(
+    goal: Sequence[float],
+    measured: Sequence[float],
+    holding: Sequence[bool],
+    epsilon: float = SETTLE_EPS_RAD,
+) -> bool:
+    """True when every held joint is within ``epsilon`` of its goal."""
+
+    if len(goal) != len(measured) or len(holding) != len(goal):
+        raise ValueError("goal, measured, and holding must have the same length")
+    for desired, current, is_hold in zip(goal, measured, holding):
+        if is_hold and abs(desired - current) > epsilon:
+            return False
+    return True
 
 
 def accumulate_hold_bias(
@@ -216,13 +253,23 @@ def accumulate_hold_bias(
     goal: Sequence[float],
     measured: Sequence[float],
     settle_gain: float,
+    holding: Sequence[bool] | None = None,
 ) -> list[float]:
-    """Add ``settle_gain * (goal - measured)`` onto an existing frozen bias."""
+    """Add ``settle_gain * (goal - measured)`` onto an existing frozen bias.
+
+    When ``holding`` is set, only held joints accumulate bias. Joints that just
+    moved keep their prior bias (usually zero) so settle cannot twitch them.
+    """
 
     if len(goal) != len(measured) or len(bias) != len(goal):
         raise ValueError("bias, goal, and measured must have the same length")
+    if holding is not None and len(holding) != len(goal):
+        raise ValueError("holding must have the same length as goal")
     updated = []
-    for offset, desired, current in zip(bias, goal, measured):
+    for index, (offset, desired, current) in enumerate(zip(bias, goal, measured)):
+        if holding is not None and not holding[index]:
+            updated.append(offset)
+            continue
         next_bias = offset + settle_gain * (desired - current)
         next_bias = max(-SETTLE_MAX_BIAS_RAD, min(SETTLE_MAX_BIAS_RAD, next_bias))
         updated.append(next_bias)

@@ -248,7 +248,7 @@ class OpenArm(_ArmBase, EasyResource):
         self.kd = list(model.ARM_KD)
         self.session: CanSession | None = None
         self.send_ids = list(model.SEND_IDS[: model.ARM_JOINTS])
-        self._servo_goal: list[float] | None = None
+        self._commanded: list[float] | None = None
         self._hold_bias: list[float] = [0.0] * model.ARM_JOINTS
         self.velocities = [0.0] * model.ARM_JOINTS
         self._settle_task: asyncio.Task[None] | None = None
@@ -320,48 +320,52 @@ class OpenArm(_ArmBase, EasyResource):
     ):
         self._cancel_settle()
         session = self._session()
-        session.prepare(self.send_ids)
-        await wait_until(
-            lambda: self._feedback_ready(),
-            FEEDBACK_TIMEOUT_S,
-            feedback_timeout(self.interface, session),
-        )
-        await wait_for_enable(
-            self.interface,
-            session,
-            [(f"joint{index + 1}", send_id) for index, send_id in enumerate(self.send_ids)],
-        )
+        # Do not re-run clear/enable when the arm is already holding. That path
+        # was dropping base-joint torque between single-joint jogs.
+        if not session.commanding(self.send_ids):
+            session.prepare(self.send_ids)
+            await wait_until(
+                lambda: self._feedback_ready(),
+                FEEDBACK_TIMEOUT_S,
+                feedback_timeout(self.interface, session),
+            )
+            await wait_for_enable(
+                self.interface,
+                session,
+                [(f"joint{index + 1}", send_id) for index, send_id in enumerate(self.send_ids)],
+            )
+            # Freshly enabled motors hold their measured angle; the old command is stale.
+            self._commanded = None
         self._read_feedback()
-        start = list(self.positions)
-        goal = model.clamp_arm(self.side, _radians(positions.values))
-        # Joints that are not changing stay at the measured start with higher gains
-        # so gravity does not pull them while another joint moves.
-        holding = model.holding_joints(start, goal)
+        measured = list(self.positions)
+        # Start from the last command, not the encoders. A PD-held joint sits below
+        # its target under gravity; re-targeting to the measured angle removes the
+        # holding torque and the joint falls until it finds a new, lower equilibrium.
+        start = list(self._commanded) if self._commanded is not None else measured
+        requested = model.clamp_arm(self.side, _radians(positions.values))
+        holding = self._holding_for_move(start, measured, requested)
+        goal = [start[index] if holding[index] else requested[index] for index in range(len(requested))]
         operation = operation_from(self, kwargs)
 
         async def update(values):
             if not self.motion.moving:
                 return
-            commanded = [
-                start[index] if holding[index] else value for index, value in enumerate(values)
-            ]
-            self.positions = commanded
-            self._command(commanded, holding)
+            self.positions = list(values)
+            self._command(values, holding)
 
-        self.positions = await self.motion.run(start, goal, self.command_speeds, update, operation)
-        # Settle in the background so a follow-up jog is not blocked by gravity trim.
-        self._schedule_settle(goal, holding)
+        final = await self.motion.run(start, goal, self.command_speeds, update, operation)
+        self.positions = list(final)
+        # A cancelled move already left its last command on the motors. Commanding
+        # the full goal here would jump past a stop.
+        if any(abs(reached - desired) > 1e-9 for reached, desired in zip(final, goal)):
+            return
+        self._finish_move(goal, holding)
 
     async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+        # The motors keep their last command, which freezes the arm where the
+        # trajectory was. Re-targeting to the measured pose would drop held joints.
         self._cancel_settle()
         await super().stop(extra=extra, timeout=timeout, **kwargs)
-        if self.session is None:
-            return
-        self._read_feedback()
-        # Freeze at the measured pose; do not servo back toward a pre-stop goal.
-        self._servo_goal = list(self.positions)
-        self._hold_bias = [0.0] * model.ARM_JOINTS
-        self._command(self._servo_goal)
 
     async def _power_off(self) -> None:
         self._cancel_settle()
@@ -370,7 +374,7 @@ class OpenArm(_ArmBase, EasyResource):
         if session is None:
             return
         self._read_feedback()
-        self._servo_goal = None
+        self._commanded = None
         self._hold_bias = [0.0] * model.ARM_JOINTS
         session.disable(self.send_ids)
 
@@ -381,44 +385,41 @@ class OpenArm(_ArmBase, EasyResource):
         if task is not None and not task.done():
             task.cancel()
 
-    def _schedule_settle(self, goal: Sequence[float], holding: Sequence[bool]) -> None:
+    def _holding_for_move(
+        self, reference: Sequence[float], measured: Sequence[float], requested: Sequence[float]
+    ) -> list[bool]:
+        return [
+            abs(want - last) <= model.HOLD_EPSILON_RAD or abs(want - now) <= model.HOLD_ECHO_RAD
+            for last, now, want in zip(reference, measured, requested)
+        ]
+
+    def _finish_move(self, goal: Sequence[float], holding: Sequence[bool]) -> None:
+        """Hold the trajectory's final command; optionally start background settle."""
+
         self._cancel_settle()
+        self._hold_bias = [0.0] * len(goal)
+        self._command(goal, holding)
+        if self.settle_gain <= 0 or self.settle_passes <= 0 or not any(holding):
+            return
+        self._read_feedback()
+        if not model.holding_needs_settle(goal, self.positions, holding):
+            return
         token = self._settle_token
         self._settle_task = asyncio.create_task(
             self._settle_to_goal(list(goal), list(holding), token),
             name=f"openarm-settle-{self.name}",
         )
 
-    def _on_target(self, goal: Sequence[float]) -> bool:
-        self._read_feedback()
-        return max(abs(desired - current) for desired, current in zip(goal, self.positions)) <= (
-            model.SETTLE_EPS_RAD
-        )
-
     async def _settle_to_goal(
         self, goal: Sequence[float], holding: Sequence[bool], token: int
     ) -> None:
-        """Drive measured pose to the goal using still-gated bias updates, then freeze.
+        """Still-gated bias trim for held joints that already drooped.
 
-        Runs after the move RPC returns. Holds the goal first and only enters the
-        still-wait / bias loop when measured joints are already off target. A new
-        move, stop, or power_off cancels this task so consecutive jogs are not
-        serialized behind settle.
+        The moved joints are never biased. A new move, stop, or power_off cancels
+        this task so consecutive jogs are not serialized behind settle.
         """
 
         try:
-            self._servo_goal = list(goal)
-            self._hold_bias = [0.0] * len(goal)
-            if token != self._settle_token:
-                return
-            self._command(goal, holding)
-            if self.settle_gain <= 0 or self.settle_passes <= 0:
-                self._read_feedback()
-                return
-            # No droop — skip the pause / still-wait / bias path entirely.
-            if self._on_target(goal):
-                return
-
             for _ in range(self.settle_passes):
                 if token != self._settle_token:
                     return
@@ -426,10 +427,11 @@ class OpenArm(_ArmBase, EasyResource):
                     return
                 if token != self._settle_token:
                     return
-                if self._on_target(goal):
+                self._read_feedback()
+                if model.holding_on_target(goal, self.positions, holding):
                     return
                 self._hold_bias = model.accumulate_hold_bias(
-                    self._hold_bias, goal, self.positions, self.settle_gain
+                    self._hold_bias, goal, self.positions, self.settle_gain, holding
                 )
                 if token != self._settle_token:
                     return
@@ -459,7 +461,7 @@ class OpenArm(_ArmBase, EasyResource):
 
     def close_hardware(self) -> None:
         self._cancel_settle()
-        self._servo_goal = None
+        self._commanded = None
         self._hold_bias = [0.0] * model.ARM_JOINTS
         session = self.session
         self.session = None
@@ -495,6 +497,7 @@ class OpenArm(_ArmBase, EasyResource):
 
     def _command(self, kinematic: Sequence[float], holding: Sequence[bool] | None = None) -> None:
         session = self._session()
+        self._commanded = list(kinematic)
         motor_positions = model.motor_from_kinematic(self.side, kinematic)
         for index, send_id in enumerate(self.send_ids):
             scale = self.gain_scale

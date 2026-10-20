@@ -83,6 +83,12 @@ def status_name(code: int) -> str:
     return STATUS_NAMES.get(code, f"status 0x{code:x}")
 
 
+def is_fault(error: int | None) -> bool:
+    """True for latched protection codes (0x8..0xE), not disabled/enabled."""
+
+    return error is not None and error >= 0x8
+
+
 def parse_state(motor_type: str, data: bytes) -> MotorState | None:
     if len(data) < 8 or is_param_reply(data):
         return None

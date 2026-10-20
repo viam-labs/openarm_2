@@ -134,12 +134,12 @@ def test_hardware_arm_power_off_disables_motors_without_closing():
         sent: list[int] = []
         session._send = lambda packets: sent.extend(arbitration_id for arbitration_id, _data in packets)  # type: ignore[method-assign]
         arm.session = session
-        arm._servo_goal = [0.1] * 7
+        arm._commanded = [0.1] * 7
 
         result = await arm.do_command({"command": "power_off"})
         assert result == {"ok": True, "command": "power_off"}
         assert arm.session is session
-        assert arm._servo_goal is None
+        assert arm._commanded is None
         assert sent == list(arm.send_ids)
         assert all(session.motors[send_id].mode == "idle" for send_id in arm.send_ids)
 
@@ -147,11 +147,34 @@ def test_hardware_arm_power_off_disables_motors_without_closing():
 
 
 def test_background_settle_is_cancelled_by_the_next_move():
+    from openarm_viam.can.bus import CanSession, Motor
+    from openarm_viam.can.damiao import STATUS_ENABLED
     from openarm_viam.models.arm import OpenArm
 
     async def run():
         arm = OpenArm("right-arm")
         arm.side = "right"
+        arm.settle_gain = 0.55
+        goal = [0.0] * 7
+        start = [0.0] * 7
+        holding = [True] * 7
+        # Held joint droop above the trigger so finish starts a settle task.
+        measured = [0.0, -math.radians(2.0), 0.0, 0.0, 0.0, 0.0, 0.0]
+        session = CanSession("can0")
+        session.motors = {
+            send_id: Motor(
+                "DM4310",
+                send_id,
+                send_id + 0x10,
+                mode="mit",
+                measured=measured[index],
+                error=STATUS_ENABLED,
+                last_rx=time.monotonic(),
+            )
+            for index, send_id in enumerate(arm.send_ids)
+        }
+        arm.session = session
+        arm.positions = list(measured)
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -164,28 +187,19 @@ def test_background_settle_is_cancelled_by_the_next_move():
                 raise
 
         arm._settle_to_goal = slow_settle  # type: ignore[method-assign]
-        arm._schedule_settle([0.0] * 7, [True] * 7)
+        arm._finish_move(goal, holding)
         await asyncio.wait_for(started.wait(), timeout=1)
         assert arm._settle_task is not None and not arm._settle_task.done()
 
-        # A follow-up schedule (what the next move does) must preempt settle.
-        second_started = asyncio.Event()
-
-        async def second_settle(goal, holding, token):
-            second_started.set()
-            await asyncio.sleep(0)
-
-        arm._settle_to_goal = second_settle  # type: ignore[method-assign]
-        arm._schedule_settle([0.1] * 7, [False] * 7)
-        await asyncio.wait_for(cancelled.wait(), timeout=1)
-        await asyncio.wait_for(second_started.wait(), timeout=1)
-
+        # A follow-up finish (what the next move does) must preempt settle.
         arm._cancel_settle()
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        assert arm._settle_task is None
 
     asyncio.run(run())
 
 
-def test_settle_skips_wait_when_already_on_target():
+def test_finish_move_keeps_hold_targets_not_measured_droop():
     from openarm_viam.can.bus import CanSession, Motor
     from openarm_viam.can.damiao import STATUS_ENABLED
     from openarm_viam.models.arm import OpenArm
@@ -193,7 +207,12 @@ def test_settle_skips_wait_when_already_on_target():
     async def run():
         arm = OpenArm("right-arm")
         arm.side = "right"
-        goal = [0.1, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0]
+        arm.settle_gain = 0.55
+        start = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        goal = [0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
+        # Joint 0 drooped during the jog; finishing must NOT command that droop.
+        measured = [-math.radians(3.0), 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
+        holding = [True, True, True, True, True, False, True]
         session = CanSession("can0")
         session.motors = {
             send_id: Motor(
@@ -201,32 +220,97 @@ def test_settle_skips_wait_when_already_on_target():
                 send_id,
                 send_id + 0x10,
                 mode="mit",
-                measured=goal[index],
+                measured=measured[index],
                 error=STATUS_ENABLED,
                 last_rx=time.monotonic(),
             )
             for index, send_id in enumerate(arm.send_ids)
         }
         arm.session = session
-        arm.positions = list(goal)
-        waited = False
-
-        async def fail_if_wait(token):
-            nonlocal waited
-            waited = True
-            raise AssertionError("settle should not wait when already on target")
-
-        arm._wait_nearly_still = fail_if_wait  # type: ignore[method-assign]
+        arm.positions = list(measured)
         commands: list[list[float]] = []
         original_command = arm._command
 
-        def track_command(kinematic, holding=None):
+        def track_command(kinematic, holding_mask=None):
             commands.append(list(kinematic))
-            original_command(kinematic, holding)
+            original_command(kinematic, holding_mask)
 
         arm._command = track_command  # type: ignore[method-assign]
-        await arm._settle_to_goal(goal, [True] * 7, arm._settle_token)
-        assert waited is False
-        assert commands == [goal]
+        arm._finish_move(goal, holding)
+        assert commands[-1] == pytest.approx(
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
+        )
+        assert commands[-1][0] != pytest.approx(measured[0])
+        assert arm._settle_task is not None
+        arm._cancel_settle()
+
+        # With settle off (default), droop must not start a background task.
+        arm.settle_gain = 0.0
+        arm._finish_move(goal, holding)
+        assert arm._settle_task is None
+
+    asyncio.run(run())
+
+
+def test_holding_matches_last_command_or_an_encoder_echo():
+    from openarm_viam.models.arm import OpenArm
+
+    arm = OpenArm("right-arm")
+    arm.side = "right"
+    reference = [0.5, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0]
+    # Joint 0 sags 3 degrees below its command under gravity.
+    measured = [0.5 - math.radians(3.0), 0.0, 0.0, 0.0, 0.0, 0.3, 0.0]
+    # A jog client echoes the measured joint 0 and changes joint 5.
+    requested = [measured[0], 0.0, 0.0, 0.0, 0.0, 0.5, 0.0]
+    holding = arm._holding_for_move(reference, measured, requested)
+    assert holding == [True, True, True, True, True, False, True]
+    # A real request for joint 0 is not mistaken for a hold.
+    requested[0] = 0.5 + math.radians(2.0)
+    assert arm._holding_for_move(reference, measured, requested)[0] is False
+
+
+def test_distal_jog_never_retargets_a_sagging_shoulder_to_its_encoder():
+    from openarm_viam import description as model
+    from openarm_viam.can.bus import CanSession, Motor
+    from openarm_viam.can.damiao import STATUS_ENABLED
+    from openarm_viam.models.arm import OpenArm
+
+    async def run():
+        arm = OpenArm("right-arm")
+        arm.side = "right"
+        commanded = [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        measured = [0.5 - math.radians(3.0), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        session = CanSession("can0")
+        session.motors = {
+            send_id: Motor(
+                model.MOTOR_TYPES[index],
+                send_id,
+                model.RECV_IDS[index],
+                mode="mit",
+                has_target=True,
+                measured=measured[index],
+                error=STATUS_ENABLED,
+                last_rx=time.monotonic(),
+            )
+            for index, send_id in enumerate(arm.send_ids)
+        }
+        arm.session = session
+        arm._commanded = list(commanded)
+        sent: list[list[float]] = []
+        original_command = arm._command
+
+        def track_command(kinematic, holding_mask=None):
+            sent.append(list(kinematic))
+            original_command(kinematic, holding_mask)
+
+        arm._command = track_command  # type: ignore[method-assign]
+        for wrist in (0.2, -0.2, 0.2):
+            # What a jog UI sends: the current readings with one joint changed.
+            echo = [math.degrees(value) for value in measured]
+            echo[5] = math.degrees(wrist)
+            await arm.move_to_joint_positions(JointPositions(values=echo))
+        assert sent
+        assert all(command[0] == pytest.approx(0.5) for command in sent)
+        assert sent[-1][5] == pytest.approx(0.2)
 
     asyncio.run(run())
