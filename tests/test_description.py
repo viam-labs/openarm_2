@@ -11,6 +11,13 @@ def test_motor_offset_round_trip():
         motor = model.motor_from_kinematic(side, kinematic)
         recovered = model.kinematic_from_motor(side, motor)
         assert recovered == pytest.approx(kinematic)
+        # Firmware zero-calibrated arms: motor angle equals URDF angle.
+        assert motor == pytest.approx(kinematic)
+
+
+def test_arm_joint_offsets_are_zero():
+    for side in ("left", "right"):
+        assert model.offsets_for(side)[: model.ARM_JOINTS] == pytest.approx([0.0] * model.ARM_JOINTS)
 
 
 def test_joint_limits_are_clamped_and_mirrored():

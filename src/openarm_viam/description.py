@@ -1,10 +1,10 @@
 """OpenArm 2.0 kinematic data used by the arm and gripper models.
 
 Numbers are taken from the public OpenArm v2.0 description (joint origins,
-axes, limits, and body mount points) and from the OpenArm driver offsets and
-MIT gains. Link collision uses boxes sized from those link lengths. Viam's URDF
-importer rejects standalone cylinders, and a model that fails to parse is
-omitted from the frame system. The module does not vendor mesh files.
+axes, limits, and body mount points) and from the OpenArm driver MIT gains.
+Link collision uses boxes sized from those link lengths. Viam's URDF importer
+rejects standalone cylinders, and a model that fails to parse is omitted from
+the frame system. The module does not vendor mesh files.
 """
 
 from __future__ import annotations
@@ -77,9 +77,13 @@ SETTLE_MAX_BIAS_RAD = math.radians(8.0)
 GRIPPER_POS_SPEED = 50.0
 GRIPPER_POS_TORQUE = 1.0 / 4.5
 
-# Motor encoder zero is not the URDF zero. motor = kinematic + offset.
-RIGHT_OFFSETS = (0.0, -0.506145, 1.570796, -1.745329, 0.0, 0.331612, -1.570796, 0.0)
-LEFT_OFFSETS = (0.0, 0.506145, -1.570796, -1.745329, 0.0, -0.331612, 1.570796, 0.0)
+# After openarm-can-zero-position-calibration, Damiao firmware zero matches the
+# URDF zero (same convention as openarm_ros2). Arm joints therefore need no
+# software offset. Earlier non-zero constants (especially joint4 ≈ -100°) made
+# a straight arm look bent in the Viam scene. Index 7 is the gripper motor;
+# open amount still uses GRIPPER_OPEN_TRAVEL below, not this slot.
+RIGHT_OFFSETS = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+LEFT_OFFSETS = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 MOTOR_TYPES = ("DM8009", "DM8009", "DM4340", "DM4340", "DM4310", "DM4310", "DM4310", "DM3507")
 SEND_IDS = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08)
