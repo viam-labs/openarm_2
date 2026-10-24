@@ -109,7 +109,12 @@ def _hold_frames(motor: Motor) -> list[tuple[int, bytes]]:
     if not motor.has_target:
         return []
     if motor.control == "posforce":
-        return [(motor.send_id + 0x300, posforce_packet(motor.target, motor.speed, motor.torque_pu))]
+        return [
+            (
+                motor.send_id + 0x300,
+                posforce_packet(motor.target, motor.speed, motor.torque_pu),
+            )
+        ]
     return [
         (
             motor.send_id,
@@ -222,7 +227,9 @@ def open_can_socket(interface: str) -> socket.socket:
     error_mask = 0
     for bit, _name in _CAN_ERRORS:
         error_mask |= bit
-    raw.setsockopt(level, getattr(socket, "CAN_RAW_ERR_FILTER", 2), struct.pack("I", error_mask))
+    raw.setsockopt(
+        level, getattr(socket, "CAN_RAW_ERR_FILTER", 2), struct.pack("I", error_mask)
+    )
     raw.bind((interface,))
     raw.settimeout(0.002)
     return raw
@@ -252,9 +259,15 @@ class CanSession:
     def start(self) -> None:
         self.fd = interface_supports_fd(self.interface)
         self._socket = open_can_socket(self.interface)
-        self._thread = threading.Thread(target=self._loop, name=f"openarm-{self.interface}", daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name=f"openarm-{self.interface}", daemon=True
+        )
         self._thread.start()
-        LOGGER.info("opened %s session on %s", "CAN-FD" if self.fd else "classic CAN", self.interface)
+        LOGGER.info(
+            "opened %s session on %s",
+            "CAN-FD" if self.fd else "classic CAN",
+            self.interface,
+        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -266,7 +279,9 @@ class CanSession:
     def add_motor(self, motor: Motor) -> None:
         with self._lock:
             if motor.send_id in self.motors:
-                raise ValueError(f"CAN id 0x{motor.send_id:02x} is already used on {self.interface}")
+                raise ValueError(
+                    f"CAN id 0x{motor.send_id:02x} is already used on {self.interface}"
+                )
             self.motors[motor.send_id] = motor
 
     def drop_motors(self, send_ids: list[int]) -> None:
@@ -300,7 +315,9 @@ class CanSession:
                 for send_id in send_ids
             )
 
-    def set_target(self, send_id: int, motor_position: float, kp: float, kd: float) -> None:
+    def set_target(
+        self, send_id: int, motor_position: float, kp: float, kd: float
+    ) -> None:
         with self._lock:
             motor = self.motors[send_id]
             motor.target = motor_position
@@ -354,7 +371,9 @@ class CanSession:
         with self._lock:
             error = self.last_error or "none"
             bus = self.last_bus or "none"
-            others = ",".join(hex(can_id) for can_id in sorted(self.other_ids)) or "none"
+            others = (
+                ",".join(hex(can_id) for can_id in sorted(self.other_ids)) or "none"
+            )
             return (
                 f"tx={self.tx_ok} tx_errors={self.tx_errors} rx={self.rx_ok} "
                 f"rx_other={self.rx_other} other_ids={others} fd={self.fd} "
@@ -416,7 +435,9 @@ class CanSession:
             outbound = []
             for motor in self.motors.values():
                 outbound.extend(commands_for(motor))
-            recv_types = {motor.recv_id: motor.motor_type for motor in self.motors.values()}
+            recv_types = {
+                motor.recv_id: motor.motor_type for motor in self.motors.values()
+            }
         for arbitration_id, data in outbound:
             self._transmit(arbitration_id, data)
         deadline = time.monotonic() + RX_WINDOW_S
@@ -515,7 +536,11 @@ class CanSession:
             self._request_reopen()
             return
         try:
-            raw.send(pack_canfd(arbitration_id, data) if self.fd else pack_classic(arbitration_id, data))
+            raw.send(
+                pack_canfd(arbitration_id, data)
+                if self.fd
+                else pack_classic(arbitration_id, data)
+            )
         except OSError as exc:
             self._note_error(exc)
             return
@@ -558,7 +583,11 @@ class CanSession:
         try:
             self.fd = interface_supports_fd(self.interface)
             self._socket = open_can_socket(self.interface)
-            LOGGER.info("reopened %s session on %s", "CAN-FD" if self.fd else "classic CAN", self.interface)
+            LOGGER.info(
+                "reopened %s session on %s",
+                "CAN-FD" if self.fd else "classic CAN",
+                self.interface,
+            )
         except OSError as exc:
             self._reopen = True
             self._note_error(exc)

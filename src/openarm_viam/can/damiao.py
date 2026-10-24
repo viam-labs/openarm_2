@@ -48,7 +48,14 @@ class MotorState:
     error: int
 
 
-def mit_packet(motor_type: str, position: float, velocity: float, kp: float, kd: float, torque: float) -> bytes:
+def mit_packet(
+    motor_type: str,
+    position: float,
+    velocity: float,
+    kp: float,
+    kd: float,
+    torque: float,
+) -> bytes:
     p_max, v_max, t_max = LIMITS[motor_type]
     position_u = _to_uint(position, -p_max, p_max, 16)
     velocity_u = _to_uint(velocity, -v_max, v_max, 12)
@@ -111,13 +118,26 @@ def command_packet(command: int) -> bytes:
 
 
 def refresh_packet(send_id: int) -> tuple[int, bytes]:
-    return 0x7FF, bytes((send_id & 0xFF, (send_id >> 8) & 0xFF, 0xCC, 0x00, 0x00, 0x00, 0x00, 0x00))
+    return 0x7FF, bytes(
+        (send_id & 0xFF, (send_id >> 8) & 0xFF, 0xCC, 0x00, 0x00, 0x00, 0x00, 0x00)
+    )
 
 
 def control_mode_packet(send_id: int, mode: int) -> tuple[int, bytes]:
     """Write the control-mode register. The motor ignores MIT frames in any other mode."""
 
-    return 0x7FF, bytes((send_id & 0xFF, (send_id >> 8) & 0xFF, 0x55, CTRL_MODE, mode & 0xFF, 0x00, 0x00, 0x00))
+    return 0x7FF, bytes(
+        (
+            send_id & 0xFF,
+            (send_id >> 8) & 0xFF,
+            0x55,
+            CTRL_MODE,
+            mode & 0xFF,
+            0x00,
+            0x00,
+            0x00,
+        )
+    )
 
 
 def posforce_packet(position: float, speed_rad_s: float, torque_pu: float) -> bytes:

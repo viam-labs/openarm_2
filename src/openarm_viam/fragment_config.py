@@ -31,7 +31,9 @@ _HEAD_ORIENTATION = {"type": "ov_degrees", "value": {"x": 0, "y": 1, "z": 0, "th
 
 def bimanual_fragment(*, fake: bool) -> dict:
     arm_model = "viam-labs:openarm-2:fake-arm" if fake else "viam-labs:openarm-2:arm"
-    gripper_model = "viam-labs:openarm-2:fake-gripper" if fake else "viam-labs:openarm-2:gripper"
+    gripper_model = (
+        "viam-labs:openarm-2:fake-gripper" if fake else "viam-labs:openarm-2:gripper"
+    )
     tcp = _xyz(gripper_tcp_mm())
     head = _viam_xyz(head_stereo_mm())
     components = [
@@ -90,7 +92,9 @@ def bimanual_fragment(*, fake: bool) -> dict:
                 "arm",
                 arm_model,
                 attributes=arm_attributes,
-                frame=_frame("body", _viam_xyz(mount_mm(side)), orientation=_ARM_ORIENTATION),
+                frame=_frame(
+                    "body", _viam_xyz(mount_mm(side)), orientation=_ARM_ORIENTATION
+                ),
             )
         )
         components.append(

@@ -1,7 +1,18 @@
 import time
 
-from openarm_viam.can.bus import FEEDBACK_TIMEOUT_S, CanSession, Motor, commands_for, reset_motor
-from openarm_viam.can.damiao import STATUS_DISABLED, STATUS_ENABLED, mit_packet, refresh_packet
+from openarm_viam.can.bus import (
+    FEEDBACK_TIMEOUT_S,
+    CanSession,
+    Motor,
+    commands_for,
+    reset_motor,
+)
+from openarm_viam.can.damiao import (
+    STATUS_DISABLED,
+    STATUS_ENABLED,
+    mit_packet,
+    refresh_packet,
+)
 
 
 def test_repeated_targets_do_not_restart_enable():
@@ -16,7 +27,9 @@ def test_repeated_targets_do_not_restart_enable():
 
 def test_hold_servos_to_the_measured_position():
     session = CanSession("can0")
-    session.motors[0x01] = Motor("DM4310", 0x01, 0x11, mode="mit", target=1.5, measured=0.4)
+    session.motors[0x01] = Motor(
+        "DM4310", 0x01, 0x11, mode="mit", target=1.5, measured=0.4
+    )
     session.hold([0x01])
     assert session.motors[0x01].target == 0.4
 

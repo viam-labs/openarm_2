@@ -54,7 +54,10 @@ async def stream_joints(
         if await cancelled():
             return commanded
         alpha = ease_alpha(step / steps)
-        commanded = [current + (desired - current) * alpha for current, desired in zip(origin, target)]
+        commanded = [
+            current + (desired - current) * alpha
+            for current, desired in zip(origin, target)
+        ]
         await update(commanded)
         if step != steps:
             await asyncio.sleep(period)

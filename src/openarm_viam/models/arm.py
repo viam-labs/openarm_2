@@ -56,7 +56,13 @@ class _ArmBase(Arm):
         self.speed_scale = scale
         self.command_speeds = [speed * scale for speed in model.ARM_SPEEDS]
 
-    async def get_end_position(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> Pose:
+    async def get_end_position(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> Pose:
         position, orientation = model.forward_kinematics(self.side, self.positions)
         return Pose(
             x=position[0],
@@ -68,24 +74,45 @@ class _ArmBase(Arm):
             theta=orientation[3],
         )
 
-    async def move_to_position(self, pose: Pose, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def move_to_position(
+        self,
+        pose: Pose,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         raise NotImplementedError(
             "OpenArm pose moves are handled by the Viam motion service, which calls move_to_joint_positions"
         )
 
     async def get_joint_positions(
-        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
     ) -> JointPositions:
         # Viam joint positions are degrees. The model and the motors stay in radians.
-        return JointPositions(values=[math.degrees(position) for position in self.positions])
+        return JointPositions(
+            values=[math.degrees(position) for position in self.positions]
+        )
 
-    async def get_kinematics(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def get_kinematics(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         return (KinematicsFileFormat.KINEMATICS_FILE_FORMAT_URDF, self.kinematics)
 
     async def is_moving(self) -> bool:
         return self.motion.moving
 
-    async def get_status(self, *, timeout: float | None = None, **kwargs) -> Mapping[str, ValueTypes]:
+    async def get_status(
+        self, *, timeout: float | None = None, **kwargs
+    ) -> Mapping[str, ValueTypes]:
         return {
             "side": self.side,
             "joints_degrees": [math.degrees(position) for position in self.positions],
@@ -107,7 +134,9 @@ class _ArmBase(Arm):
         async def update(values):
             self.positions = list(values)
 
-        self.positions = await self.motion.run(self.positions, goal, self.command_speeds, update, operation)
+        self.positions = await self.motion.run(
+            self.positions, goal, self.command_speeds, update, operation
+        )
 
     async def move_through_joint_positions(
         self,
@@ -122,7 +151,9 @@ class _ArmBase(Arm):
         self.command_speeds = _speeds_for(options)
         try:
             for waypoint in positions:
-                await self.move_to_joint_positions(waypoint, extra=extra, timeout=timeout, **kwargs)
+                await self.move_to_joint_positions(
+                    waypoint, extra=extra, timeout=timeout, **kwargs
+                )
         finally:
             self.command_speeds = previous
 
@@ -138,14 +169,23 @@ class _ArmBase(Arm):
         async for batch in batches:
             for point in batch:
                 await self.move_to_joint_positions(
-                    JointPositions(values=point.positions), extra=extra, timeout=timeout, **kwargs
+                    JointPositions(values=point.positions),
+                    extra=extra,
+                    timeout=timeout,
+                    **kwargs,
                 )
             yield Arm.TrajectoryUpdate()
             sent = True
         if not sent:
             yield Arm.TrajectoryUpdate()
 
-    async def get_3d_models(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def get_3d_models(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         return {}
 
     async def set_manual_mode(
@@ -160,20 +200,44 @@ class _ArmBase(Arm):
         if manual_mode:
             raise NotImplementedError("OpenArm has no software manual mode")
 
-    async def get_manual_mode(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> bool:
+    async def get_manual_mode(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> bool:
         return False
 
-    async def get_properties(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def get_properties(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         # Newer SDKs require this. The response type is not in older wheels.
         from viam.proto.component.arm import GetPropertiesResponse
 
-        return GetPropertiesResponse(support_manual_mode=False, support_cartesian_commands=False)
+        return GetPropertiesResponse(
+            support_manual_mode=False, support_cartesian_commands=False
+        )
 
-    async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def stop(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         self.motion.cancel()
 
     async def do_command(
-        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
+        self,
+        command: Mapping[str, ValueTypes],
+        *,
+        timeout: float | None = None,
+        **kwargs,
     ) -> Mapping[str, ValueTypes]:
         name = command.get("command")
         if name == "move_to_neutral":
@@ -181,10 +245,16 @@ class _ArmBase(Arm):
         if name == "power_off":
             await self._power_off()
             return {"ok": True, "command": "power_off"}
-        raise ValueError("unsupported DoCommand; use command='move_to_neutral' or command='power_off'")
+        raise ValueError(
+            "unsupported DoCommand; use command='move_to_neutral' or command='power_off'"
+        )
 
     async def _move_to_neutral(
-        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
+        self,
+        command: Mapping[str, ValueTypes],
+        *,
+        timeout: float | None = None,
+        **kwargs,
     ) -> Mapping[str, ValueTypes]:
         scale = float(command.get("speed_scale", model.NEUTRAL_SPEED_SCALE))
         if scale <= 0:
@@ -193,7 +263,9 @@ class _ArmBase(Arm):
         self.command_speeds = [speed * scale for speed in previous]
         try:
             await self.move_to_joint_positions(
-                JointPositions(values=[math.degrees(value) for value in model.NEUTRAL_POSITION_RAD]),
+                JointPositions(
+                    values=[math.degrees(value) for value in model.NEUTRAL_POSITION_RAD]
+                ),
                 timeout=timeout,
                 **kwargs,
             )
@@ -216,17 +288,23 @@ class FakeArm(_ArmBase, EasyResource):
     MODEL: ClassVar[str] = "viam-labs:openarm-2:fake-arm"  # type: ignore[assignment]
 
     @classmethod
-    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
+    def new(
+        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
+    ) -> Self:
         arm = cls(config.name)
         arm.reconfigure(config, dependencies)
         return arm
 
     @classmethod
-    def validate_config(cls, config: ComponentConfig) -> tuple[Sequence[str], Sequence[str]]:
+    def validate_config(
+        cls, config: ComponentConfig
+    ) -> tuple[Sequence[str], Sequence[str]]:
         _require_side(struct_to_dict(config.attributes))
         return [], []
 
-    def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
+    def reconfigure(
+        self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
+    ):
         attributes = struct_to_dict(config.attributes)
         self._apply_side(_require_side(attributes))
         self._apply_speed_scale(attributes)
@@ -255,24 +333,32 @@ class OpenArm(_ArmBase, EasyResource):
         self._settle_token = 0
 
     @classmethod
-    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
+    def new(
+        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
+    ) -> Self:
         arm = cls(config.name)
         arm.reconfigure(config, dependencies)
         return arm
 
     @classmethod
-    def validate_config(cls, config: ComponentConfig) -> tuple[Sequence[str], Sequence[str]]:
+    def validate_config(
+        cls, config: ComponentConfig
+    ) -> tuple[Sequence[str], Sequence[str]]:
         _hardware_attributes(struct_to_dict(config.attributes))
         return [], []
 
-    def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
+    def reconfigure(
+        self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
+    ):
         self.close_hardware()
         attributes = _hardware_attributes(struct_to_dict(config.attributes))
         self._apply_side(attributes["side"])
         self._apply_speed_scale(attributes)
         self.interface = attributes["can_interface"]
         self.gain_scale = float(attributes.get("gain_scale", 1.0))
-        self.hold_gain_scale = float(attributes.get("hold_gain_scale", model.HOLD_GAIN_SCALE))
+        self.hold_gain_scale = float(
+            attributes.get("hold_gain_scale", model.HOLD_GAIN_SCALE)
+        )
         self.settle_gain = float(attributes.get("settle_gain", model.SETTLE_GAIN))
         if self.settle_gain < 0:
             raise ValueError("settle_gain must be non-negative")
@@ -297,14 +383,26 @@ class OpenArm(_ArmBase, EasyResource):
                     recv_id=model.RECV_IDS[index],
                 )
             )
-        self.logger.info("OpenArm %s using %s side %s", self.name, self.interface, self.side)
+        self.logger.info(
+            "OpenArm %s using %s side %s", self.name, self.interface, self.side
+        )
 
-    async def get_end_position(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> Pose:
+    async def get_end_position(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> Pose:
         self._read_feedback()
         return await super().get_end_position(extra=extra, timeout=timeout, **kwargs)
 
     async def get_joint_positions(
-        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
     ) -> JointPositions:
         self._read_feedback()
         return await super().get_joint_positions(extra=extra, timeout=timeout, **kwargs)
@@ -332,7 +430,10 @@ class OpenArm(_ArmBase, EasyResource):
             await wait_for_enable(
                 self.interface,
                 session,
-                [(f"joint{index + 1}", send_id) for index, send_id in enumerate(self.send_ids)],
+                [
+                    (f"joint{index + 1}", send_id)
+                    for index, send_id in enumerate(self.send_ids)
+                ],
             )
             # Freshly enabled motors hold their measured angle; the old command is stale.
             self._commanded = None
@@ -344,7 +445,10 @@ class OpenArm(_ArmBase, EasyResource):
         start = list(self._commanded) if self._commanded is not None else measured
         requested = model.clamp_arm(self.side, _radians(positions.values))
         holding = self._holding_for_move(start, measured, requested)
-        goal = [start[index] if holding[index] else requested[index] for index in range(len(requested))]
+        goal = [
+            start[index] if holding[index] else requested[index]
+            for index in range(len(requested))
+        ]
         operation = operation_from(self, kwargs)
 
         async def update(values):
@@ -353,7 +457,9 @@ class OpenArm(_ArmBase, EasyResource):
             self.positions = list(values)
             self._command(values, holding)
 
-        final = await self.motion.run(start, goal, self.command_speeds, update, operation)
+        final = await self.motion.run(
+            start, goal, self.command_speeds, update, operation
+        )
         self.positions = list(final)
         # A cancelled move already left its last command on the motors. Commanding
         # the full goal here would jump past a stop.
@@ -361,7 +467,13 @@ class OpenArm(_ArmBase, EasyResource):
             return
         self._finish_move(goal, holding)
 
-    async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def stop(
+        self,
+        *,
+        extra: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         # The motors keep their last command, which freezes the arm where the
         # trajectory was. Re-targeting to the measured pose would drop held joints.
         self._cancel_settle()
@@ -386,10 +498,14 @@ class OpenArm(_ArmBase, EasyResource):
             task.cancel()
 
     def _holding_for_move(
-        self, reference: Sequence[float], measured: Sequence[float], requested: Sequence[float]
+        self,
+        reference: Sequence[float],
+        measured: Sequence[float],
+        requested: Sequence[float],
     ) -> list[bool]:
         return [
-            abs(want - last) <= model.HOLD_EPSILON_RAD or abs(want - now) <= model.HOLD_ECHO_RAD
+            abs(want - last) <= model.HOLD_EPSILON_RAD
+            or abs(want - now) <= model.HOLD_ECHO_RAD
             for last, now, want in zip(reference, measured, requested)
         ]
 
@@ -436,7 +552,8 @@ class OpenArm(_ArmBase, EasyResource):
                 if token != self._settle_token:
                     return
                 self._command(
-                    [desired + bias for desired, bias in zip(goal, self._hold_bias)], holding
+                    [desired + bias for desired, bias in zip(goal, self._hold_bias)],
+                    holding,
                 )
             if token == self._settle_token:
                 self._read_feedback()
@@ -454,7 +571,10 @@ class OpenArm(_ArmBase, EasyResource):
             if token != self._settle_token:
                 return False
             self._read_feedback()
-            if max(abs(velocity) for velocity in self.velocities) <= model.SETTLE_STILL_VEL_RAD_S:
+            if (
+                max(abs(velocity) for velocity in self.velocities)
+                <= model.SETTLE_STILL_VEL_RAD_S
+            ):
                 return True
             await asyncio.sleep(0.02)
         return token == self._settle_token
@@ -491,11 +611,17 @@ class OpenArm(_ArmBase, EasyResource):
         session = self.session
         if session is None or not self._feedback_ready():
             return
-        motor_positions = [session.measured(send_id) or 0.0 for send_id in self.send_ids]
+        motor_positions = [
+            session.measured(send_id) or 0.0 for send_id in self.send_ids
+        ]
         self.velocities = [session.velocity(send_id) for send_id in self.send_ids]
-        self.positions = model.clamp_arm(self.side, model.kinematic_from_motor(self.side, motor_positions))
+        self.positions = model.clamp_arm(
+            self.side, model.kinematic_from_motor(self.side, motor_positions)
+        )
 
-    def _command(self, kinematic: Sequence[float], holding: Sequence[bool] | None = None) -> None:
+    def _command(
+        self, kinematic: Sequence[float], holding: Sequence[bool] | None = None
+    ) -> None:
         session = self._session()
         self._commanded = list(kinematic)
         motor_positions = model.motor_from_kinematic(self.side, kinematic)
@@ -549,7 +675,9 @@ def _hardware_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:
     return {"side": side, "can_interface": interface, **dict(attributes)}
 
 
-def _gains(attributes: Mapping[str, Any], key: str, default: Sequence[float]) -> list[float]:
+def _gains(
+    attributes: Mapping[str, Any], key: str, default: Sequence[float]
+) -> list[float]:
     value = attributes.get(key, default)
     gains = [float(item) for item in value]
     if len(gains) != model.ARM_JOINTS:

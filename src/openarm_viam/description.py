@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+
 ARM_JOINTS = 7
 
 # Canonical (right-arm) joint data from openarm_description v2.0.
@@ -91,7 +92,16 @@ GRIPPER_POS_TORQUE = 1.0 / 4.5
 RIGHT_OFFSETS = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 LEFT_OFFSETS = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-MOTOR_TYPES = ("DM8009", "DM8009", "DM4340", "DM4340", "DM4310", "DM4310", "DM4310", "DM3507")
+MOTOR_TYPES = (
+    "DM8009",
+    "DM8009",
+    "DM4340",
+    "DM4340",
+    "DM4310",
+    "DM4310",
+    "DM4310",
+    "DM3507",
+)
 SEND_IDS = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08)
 RECV_IDS = (0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18)
 
@@ -191,7 +201,9 @@ def clamp_arm(side: str, values: Sequence[float]) -> list[float]:
     specs = arm_joints(side)
     if len(values) != len(specs):
         raise ValueError(f"arm expects {len(specs)} joint positions, got {len(values)}")
-    return [min(spec.upper, max(spec.lower, value)) for spec, value in zip(specs, values)]
+    return [
+        min(spec.upper, max(spec.lower, value)) for spec, value in zip(specs, values)
+    ]
 
 
 def holding_joints(
@@ -291,7 +303,10 @@ def kinematic_from_motor(side: str, motor: Sequence[float]) -> list[float]:
 
 def gripper_motor(side: str, open_amount: float) -> float:
     amount = min(GRIPPER_OPEN, max(GRIPPER_CLOSED, open_amount))
-    return offsets_for(side)[ARM_JOINTS] + gripper_sign(side) * amount * GRIPPER_OPEN_TRAVEL
+    return (
+        offsets_for(side)[ARM_JOINTS]
+        + gripper_sign(side) * amount * GRIPPER_OPEN_TRAVEL
+    )
 
 
 def gripper_open_amount(side: str, motor: float) -> float:
@@ -327,7 +342,9 @@ def arm_urdf(side: str) -> str:
         lines.append(f'  <joint name="{prefix}_joint{index + 1}" type="revolute">')
         lines.append(f'    <parent link="{parent}"/>')
         lines.append(f'    <child link="{child}"/>')
-        lines.append(f'    <origin xyz="{_fmt(ox)} {_fmt(oy)} {_fmt(oz)}" rpy="0 0 0"/>')
+        lines.append(
+            f'    <origin xyz="{_fmt(ox)} {_fmt(oy)} {_fmt(oz)}" rpy="0 0 0"/>'
+        )
         lines.append(f'    <axis xyz="{_fmt(ax)} {_fmt(ay)} {_fmt(az)}"/>')
         lines.append(
             f'    <limit lower="{_fmt(spec.lower)}" upper="{_fmt(spec.upper)}" '
@@ -360,7 +377,9 @@ def gripper_urdf(side: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def forward_kinematics(side: str, joints: Sequence[float]) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+def forward_kinematics(
+    side: str, joints: Sequence[float]
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
     """Return the link7 origin in millimeters and an orientation vector in degrees."""
 
     specs = arm_joints(side)
@@ -415,7 +434,9 @@ def _translation(x: float, y: float, z: float) -> list[list[float]]:
     return transform
 
 
-def _rotation_about(axis: tuple[float, float, float], angle: float) -> list[list[float]]:
+def _rotation_about(
+    axis: tuple[float, float, float], angle: float
+) -> list[list[float]]:
     length = math.sqrt(_dot(axis, axis))
     x, y, z = (component / length for component in axis)
     c = math.cos(angle)
@@ -429,7 +450,9 @@ def _rotation_about(axis: tuple[float, float, float], angle: float) -> list[list
     ]
 
 
-def _matmul(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -> list[list[float]]:
+def _matmul(
+    left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]
+) -> list[list[float]]:
     result = [[0.0, 0.0, 0.0, 0.0] for _ in range(4)]
     for row in range(4):
         for col in range(4):
@@ -437,7 +460,9 @@ def _matmul(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -
     return result
 
 
-def _orientation_vector(transform: Sequence[Sequence[float]]) -> tuple[float, float, float, float]:
+def _orientation_vector(
+    transform: Sequence[Sequence[float]],
+) -> tuple[float, float, float, float]:
     rotation = tuple(tuple(transform[row][col] for col in range(3)) for row in range(3))
     trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
     angle = math.acos(max(-1.0, min(1.0, (trace - 1.0) / 2.0)))
@@ -457,4 +482,3 @@ def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]
     if length < 1e-12:
         return (0.0, 0.0, 1.0)
     return (vector[0] / length, vector[1] / length, vector[2] / length)
-
