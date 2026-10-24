@@ -16,8 +16,7 @@ from typing_extensions import Self
 from viam.components.arm import Arm, JointPositions, Pose
 from viam.operations import run_with_operation
 from viam.proto.app.robot import ComponentConfig
-from viam.proto.common import KinematicsFileFormat
-from viam.proto.common import ResourceName
+from viam.proto.common import KinematicsFileFormat, ResourceName
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.utils import ValueTypes, struct_to_dict
