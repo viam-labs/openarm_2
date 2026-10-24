@@ -176,7 +176,6 @@ def test_background_settle_is_cancelled_by_the_next_move():
         arm.side = "right"
         arm.settle_gain = 0.55
         goal = [0.0] * 7
-        start = [0.0] * 7
         holding = [True] * 7
         # Held joint droop above the trigger so finish starts a settle task.
         measured = [0.0, -math.radians(2.0), 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -228,7 +227,6 @@ def test_finish_move_keeps_hold_targets_not_measured_droop():
         arm = OpenArm("right-arm")
         arm.side = "right"
         arm.settle_gain = 0.55
-        start = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         goal = [0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
         # Joint 0 drooped during the jog; finishing must NOT command that droop.
         measured = [-math.radians(3.0), 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
