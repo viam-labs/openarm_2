@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+
 ARM_JOINTS = 7
 
 # Canonical (right-arm) joint data from openarm_description v2.0.
@@ -194,9 +195,7 @@ def clamp_arm(side: str, values: Sequence[float]) -> list[float]:
     return [min(spec.upper, max(spec.lower, value)) for spec, value in zip(specs, values)]
 
 
-def holding_joints(
-    start: Sequence[float], goal: Sequence[float], epsilon: float = HOLD_EPSILON_RAD
-) -> list[bool]:
+def holding_joints(start: Sequence[float], goal: Sequence[float], epsilon: float = HOLD_EPSILON_RAD) -> list[bool]:
     """True for each joint whose goal matches the start within ``epsilon`` radians."""
 
     if len(start) != len(goal):
@@ -360,7 +359,9 @@ def gripper_urdf(side: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def forward_kinematics(side: str, joints: Sequence[float]) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+def forward_kinematics(
+    side: str, joints: Sequence[float]
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
     """Return the link7 origin in millimeters and an orientation vector in degrees."""
 
     specs = arm_joints(side)
@@ -457,4 +458,3 @@ def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]
     if length < 1e-12:
         return (0.0, 0.0, 1.0)
     return (vector[0] / length, vector[1] / length, vector[2] / length)
-

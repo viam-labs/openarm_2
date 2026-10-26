@@ -110,7 +110,9 @@ def test_gripper_sets_position_force_mode_before_enabling():
 
 
 def test_gripper_runs_in_position_force_mode():
-    motor = Motor("DM3507", 0x08, 0x18, mode="mit", control="posforce", has_target=True, target=0.2, speed=50, torque_pu=0.2)
+    motor = Motor(
+        "DM3507", 0x08, 0x18, mode="mit", control="posforce", has_target=True, target=0.2, speed=50, torque_pu=0.2
+    )
     arbitration_id, _data = commands_for(motor)[0]
     assert arbitration_id == 0x308
 

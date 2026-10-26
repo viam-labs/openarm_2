@@ -471,8 +471,7 @@ class CanSession:
                             elif state.error == 0xD and motor.has_target:
                                 # Communication-lost: resume MIT; do not CLEAR storm.
                                 LOGGER.warning(
-                                    "motor 0x%02x on %s reported communication lost; "
-                                    "keeping MIT hold",
+                                    "motor 0x%02x on %s reported communication lost; keeping MIT hold",
                                     motor.send_id,
                                     self.interface,
                                 )

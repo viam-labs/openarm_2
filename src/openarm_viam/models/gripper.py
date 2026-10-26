@@ -102,7 +102,12 @@ class _GripperBase(Gripper):
         self.motion.cancel()
 
     async def get_status(self, *, timeout: float | None = None, **kwargs) -> Mapping[str, ValueTypes]:
-        return {"side": self.side, "open_amount": self.open_amount, "holding": self.holding, "moving": self.motion.moving}
+        return {
+            "side": self.side,
+            "open_amount": self.open_amount,
+            "holding": self.holding,
+            "moving": self.motion.moving,
+        }
 
 
 class FakeGripper(_GripperBase, EasyResource):

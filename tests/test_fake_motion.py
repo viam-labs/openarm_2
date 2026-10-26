@@ -90,9 +90,7 @@ def test_hardware_config_requires_a_can_interface():
 def test_fake_arm_do_command_moves_to_neutral_and_powers_off():
     async def run():
         arm = FakeArm.new(_config("right-arm", {"side": "right", "speed_scale": 4.0}), {})
-        await arm.move_to_joint_positions(
-            JointPositions(values=[0, 0, 0, math.degrees(0.4), 0, 0, 0])
-        )
+        await arm.move_to_joint_positions(JointPositions(values=[0, 0, 0, math.degrees(0.4), 0, 0, 0]))
         result = await arm.do_command({"command": "move_to_neutral", "speed_scale": 1.0})
         assert result["ok"] is True
         assert result["command"] == "move_to_neutral"
@@ -128,8 +126,7 @@ def test_hardware_arm_power_off_disables_motors_without_closing():
         arm.side = "right"
         session = CanSession("can0")
         session.motors = {
-            send_id: Motor("DM4310", send_id, send_id + 0x10, mode="mit", measured=0.1)
-            for send_id in arm.send_ids
+            send_id: Motor("DM4310", send_id, send_id + 0x10, mode="mit", measured=0.1) for send_id in arm.send_ids
         }
         sent: list[int] = []
         session._send = lambda packets: sent.extend(arbitration_id for arbitration_id, _data in packets)  # type: ignore[method-assign]
@@ -156,7 +153,6 @@ def test_background_settle_is_cancelled_by_the_next_move():
         arm.side = "right"
         arm.settle_gain = 0.55
         goal = [0.0] * 7
-        start = [0.0] * 7
         holding = [True] * 7
         # Held joint droop above the trigger so finish starts a settle task.
         measured = [0.0, -math.radians(2.0), 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -208,7 +204,6 @@ def test_finish_move_keeps_hold_targets_not_measured_droop():
         arm = OpenArm("right-arm")
         arm.side = "right"
         arm.settle_gain = 0.55
-        start = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         goal = [0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
         # Joint 0 drooped during the jog; finishing must NOT command that droop.
         measured = [-math.radians(3.0), 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
@@ -237,9 +232,7 @@ def test_finish_move_keeps_hold_targets_not_measured_droop():
 
         arm._command = track_command  # type: ignore[method-assign]
         arm._finish_move(goal, holding)
-        assert commands[-1] == pytest.approx(
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0]
-        )
+        assert commands[-1] == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0])
         assert commands[-1][0] != pytest.approx(measured[0])
         assert arm._settle_task is not None
         arm._cancel_settle()

@@ -16,8 +16,7 @@ from typing_extensions import Self
 from viam.components.arm import Arm, JointPositions, Pose
 from viam.operations import run_with_operation
 from viam.proto.app.robot import ComponentConfig
-from viam.proto.common import KinematicsFileFormat
-from viam.proto.common import ResourceName
+from viam.proto.common import KinematicsFileFormat, ResourceName
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.utils import ValueTypes, struct_to_dict
@@ -56,7 +55,9 @@ class _ArmBase(Arm):
         self.speed_scale = scale
         self.command_speeds = [speed * scale for speed in model.ARM_SPEEDS]
 
-    async def get_end_position(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> Pose:
+    async def get_end_position(
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+    ) -> Pose:
         position, orientation = model.forward_kinematics(self.side, self.positions)
         return Pose(
             x=position[0],
@@ -68,7 +69,9 @@ class _ArmBase(Arm):
             theta=orientation[3],
         )
 
-    async def move_to_position(self, pose: Pose, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
+    async def move_to_position(
+        self, pose: Pose, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+    ):
         raise NotImplementedError(
             "OpenArm pose moves are handled by the Viam motion service, which calls move_to_joint_positions"
         )
@@ -160,7 +163,9 @@ class _ArmBase(Arm):
         if manual_mode:
             raise NotImplementedError("OpenArm has no software manual mode")
 
-    async def get_manual_mode(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> bool:
+    async def get_manual_mode(
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+    ) -> bool:
         return False
 
     async def get_properties(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
@@ -299,7 +304,9 @@ class OpenArm(_ArmBase, EasyResource):
             )
         self.logger.info("OpenArm %s using %s side %s", self.name, self.interface, self.side)
 
-    async def get_end_position(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> Pose:
+    async def get_end_position(
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
+    ) -> Pose:
         self._read_feedback()
         return await super().get_end_position(extra=extra, timeout=timeout, **kwargs)
 
@@ -410,9 +417,7 @@ class OpenArm(_ArmBase, EasyResource):
             name=f"openarm-settle-{self.name}",
         )
 
-    async def _settle_to_goal(
-        self, goal: Sequence[float], holding: Sequence[bool], token: int
-    ) -> None:
+    async def _settle_to_goal(self, goal: Sequence[float], holding: Sequence[bool], token: int) -> None:
         """Still-gated bias trim for held joints that already drooped.
 
         The moved joints are never biased. A new move, stop, or power_off cancels
@@ -435,9 +440,7 @@ class OpenArm(_ArmBase, EasyResource):
                 )
                 if token != self._settle_token:
                     return
-                self._command(
-                    [desired + bias for desired, bias in zip(goal, self._hold_bias)], holding
-                )
+                self._command([desired + bias for desired, bias in zip(goal, self._hold_bias)], holding)
             if token == self._settle_token:
                 self._read_feedback()
         except asyncio.CancelledError:
