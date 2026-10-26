@@ -62,9 +62,7 @@ def feedback_timeout(interface: str, session: CanSession) -> str:
     )
 
 
-async def wait_for_enable(
-    interface: str, session: CanSession, joints: Sequence[tuple[str, int]]
-) -> None:
+async def wait_for_enable(interface: str, session: CanSession, joints: Sequence[tuple[str, int]]) -> None:
     """Fail with each motor's reported state instead of streaming to motors that ignore it."""
 
     send_ids = [send_id for _name, send_id in joints]
@@ -84,9 +82,7 @@ async def wait_for_enable(
     )
 
 
-async def wait_until(
-    predicate: Callable[[], bool], timeout: float, message: str
-) -> None:
+async def wait_until(predicate: Callable[[], bool], timeout: float, message: str) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if predicate():

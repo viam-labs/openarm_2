@@ -18,9 +18,7 @@ def test_motor_offset_round_trip():
 
 def test_arm_joint_offsets_are_zero():
     for side in ("left", "right"):
-        assert model.offsets_for(side)[: model.ARM_JOINTS] == pytest.approx(
-            [0.0] * model.ARM_JOINTS
-        )
+        assert model.offsets_for(side)[: model.ARM_JOINTS] == pytest.approx([0.0] * model.ARM_JOINTS)
 
 
 def test_joint_limits_are_clamped_and_mirrored():
@@ -43,15 +41,7 @@ def test_joint_limits_are_clamped_and_mirrored():
 def test_holding_joints_marks_stationary_axes():
     start = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
     goal = [0.1, 1.0, 0.3, 0.4, 0.5, 0.6, 0.7]
-    assert model.holding_joints(start, goal) == [
-        True,
-        False,
-        True,
-        True,
-        True,
-        True,
-        True,
-    ]
+    assert model.holding_joints(start, goal) == [True, False, True, True, True, True, True]
 
 
 def test_settle_targets_cancel_gravity_droop():
@@ -107,9 +97,7 @@ def test_gripper_open_amount_round_trip():
 def test_arm_urdf_has_seven_joints_and_collision():
     for side in ("left", "right"):
         root = ET.fromstring(model.arm_urdf(side))
-        joints = [
-            joint for joint in root.findall("joint") if joint.get("type") == "revolute"
-        ]
+        joints = [joint for joint in root.findall("joint") if joint.get("type") == "revolute"]
         assert len(joints) == 7
         assert root.find("link/collision/geometry/box") is not None
         assert root.find("link/collision/geometry/cylinder") is None

@@ -2,15 +2,7 @@ import struct
 
 import pytest
 
-from openarm_viam.can.bus import (
-    CANFD_BRS,
-    ENABLE_CYCLES,
-    Motor,
-    commands_for,
-    pack_canfd,
-    pack_classic,
-    unpack_frame,
-)
+from openarm_viam.can.bus import CANFD_BRS, ENABLE_CYCLES, Motor, commands_for, pack_canfd, pack_classic, unpack_frame
 from openarm_viam.can.damiao import (
     CLEAR_ERROR,
     ENABLE,
@@ -66,13 +58,8 @@ def test_classic_frame_uses_the_16_byte_layout():
 
 
 def test_control_mode_and_posforce_frames_match_the_openarm_layout():
-    assert control_mode_packet(0x08, MODE_POS_FORCE) == (
-        0x7FF,
-        bytes((0x08, 0x00, 0x55, 10, MODE_POS_FORCE, 0, 0, 0)),
-    )
-    position, speed, torque = struct.unpack(
-        "<fHH", posforce_packet(1.25, 50.0, 1.0 / 4.5)
-    )
+    assert control_mode_packet(0x08, MODE_POS_FORCE) == (0x7FF, bytes((0x08, 0x00, 0x55, 10, MODE_POS_FORCE, 0, 0, 0)))
+    position, speed, torque = struct.unpack("<fHH", posforce_packet(1.25, 50.0, 1.0 / 4.5))
     assert position == pytest.approx(1.25)
     assert speed == 5000
     assert torque == int((1.0 / 4.5) * 10000)
@@ -124,15 +111,7 @@ def test_gripper_sets_position_force_mode_before_enabling():
 
 def test_gripper_runs_in_position_force_mode():
     motor = Motor(
-        "DM3507",
-        0x08,
-        0x18,
-        mode="mit",
-        control="posforce",
-        has_target=True,
-        target=0.2,
-        speed=50,
-        torque_pu=0.2,
+        "DM3507", 0x08, 0x18, mode="mit", control="posforce", has_target=True, target=0.2, speed=50, torque_pu=0.2
     )
     arbitration_id, _data = commands_for(motor)[0]
     assert arbitration_id == 0x308

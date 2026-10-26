@@ -20,9 +20,7 @@ def test_fragment_files_match_the_builder():
 def test_fragments_share_names_and_frames():
     hardware = _load("openarm-bimanual.json")
     fake = _load("openarm-bimanual-fake.json")
-    hardware_components = {
-        component["name"]: component for component in hardware["components"]
-    }
+    hardware_components = {component["name"]: component for component in hardware["components"]}
     fake_components = {component["name"]: component for component in fake["components"]}
     assert set(hardware_components) == set(fake_components)
     assert set(hardware_components) == {
@@ -47,9 +45,7 @@ def test_fragments_share_names_and_frames():
     assert hardware_components["left-arm"]["attributes"]["can_interface"] == "can1"
     assert hardware_components["right-arm"]["model"] == "viam-labs:openarm-2:arm"
     assert fake_components["right-arm"]["model"] == "viam-labs:openarm-2:fake-arm"
-    assert (
-        fake_components["left-gripper"]["model"] == "viam-labs:openarm-2:fake-gripper"
-    )
+    assert fake_components["left-gripper"]["model"] == "viam-labs:openarm-2:fake-gripper"
 
     right_mount = mount_mm("right")
     left_mount = mount_mm("left")
@@ -76,26 +72,16 @@ def test_fragments_share_names_and_frames():
         == hardware_components["right-arm"]["frame"]["orientation"]
     )
     assert hardware_components["head-stereo"]["frame"]["parent"] == "body"
-    assert hardware_components["head-stereo"]["frame"]["translation"] == {
-        "x": -head[1],
-        "y": head[0],
-        "z": head[2],
-    }
+    assert hardware_components["head-stereo"]["frame"]["translation"] == {"x": -head[1], "y": head[0], "z": head[2]}
     assert hardware_components["head-stereo"]["frame"]["geometry"]["type"] == "box"
-    head_orientation = hardware_components["head-stereo"]["frame"]["orientation"][
-        "value"
-    ]
+    head_orientation = hardware_components["head-stereo"]["frame"]["orientation"]["value"]
     assert head_orientation == {"x": 0, "y": 1, "z": 0, "th": -90}
     assert (
         hardware_components["head-stereo"]["frame"]["geometry"]["x"]
         > hardware_components["head-stereo"]["frame"]["geometry"]["y"]
     )
     assert hardware_components["right-gripper"]["frame"]["parent"] == "right-arm"
-    assert hardware_components["right-gripper"]["frame"]["translation"] == {
-        "x": tcp[0],
-        "y": tcp[1],
-        "z": tcp[2],
-    }
+    assert hardware_components["right-gripper"]["frame"]["translation"] == {"x": tcp[0], "y": tcp[1], "z": tcp[2]}
     assert hardware_components["right-camera"]["frame"]["parent"] == "right-gripper"
     assert hardware_components["left-camera"]["frame"]["parent"] == "left-gripper"
     assert (

@@ -47,54 +47,26 @@ class _GripperBase(Gripper):
         self.kinematics = model.gripper_urdf(self.side).encode("utf-8")
 
     async def get_current_inputs(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ) -> list[float]:
         return [self.open_amount]
 
-    async def get_kinematics(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
-    ):
+    async def get_kinematics(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         return (KinematicsFileFormat.KINEMATICS_FILE_FORMAT_URDF, self.kinematics)
 
     async def is_moving(self) -> bool:
         return self.motion.moving
 
     async def is_holding_something(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ) -> Gripper.HoldingStatus:
-        return Gripper.HoldingStatus(
-            is_holding_something=self.holding, meta={"open_amount": self.open_amount}
-        )
+        return Gripper.HoldingStatus(is_holding_something=self.holding, meta={"open_amount": self.open_amount})
 
-    async def open(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
-    ):
+    async def open(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         await self.go_to_inputs(_OPEN_INPUT, extra=extra, timeout=timeout, **kwargs)
         self.holding = False
 
-    async def grab(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
-    ) -> bool:
+    async def grab(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs) -> bool:
         await self.go_to_inputs(_CLOSED_INPUT, extra=extra, timeout=timeout, **kwargs)
         # A real object stops the fingers before they reach closed. The fake model reaches closed.
         self.holding = self.open_amount > 0.15
@@ -102,12 +74,7 @@ class _GripperBase(Gripper):
 
     @run_with_operation
     async def go_to_inputs(
-        self,
-        values: list[float],
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
+        self, values: list[float], *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ):
         if not values:
             raise ValueError("gripper expects one input, 0 closed and 1 open")
@@ -117,25 +84,13 @@ class _GripperBase(Gripper):
         async def update(commanded):
             self.open_amount = commanded[0]
 
-        await self.motion.run(
-            [self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation
-        )
+        await self.motion.run([self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation)
 
-    async def stop(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
-    ):
+    async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         self.motion.cancel()
 
     async def do_command(
-        self,
-        command: Mapping[str, ValueTypes],
-        *,
-        timeout: float | None = None,
-        **kwargs,
+        self, command: Mapping[str, ValueTypes], *, timeout: float | None = None, **kwargs
     ) -> Mapping[str, ValueTypes]:
         name = command.get("command")
         if name == "power_off":
@@ -146,9 +101,7 @@ class _GripperBase(Gripper):
     async def _power_off(self) -> None:
         self.motion.cancel()
 
-    async def get_status(
-        self, *, timeout: float | None = None, **kwargs
-    ) -> Mapping[str, ValueTypes]:
+    async def get_status(self, *, timeout: float | None = None, **kwargs) -> Mapping[str, ValueTypes]:
         return {
             "side": self.side,
             "open_amount": self.open_amount,
@@ -161,23 +114,17 @@ class FakeGripper(_GripperBase, EasyResource):
     MODEL: ClassVar[str] = "viam-labs:openarm-2:fake-gripper"  # type: ignore[assignment]
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         gripper = cls(config.name)
         gripper.reconfigure(config, dependencies)
         return gripper
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> tuple[Sequence[str], Sequence[str]]:
         _require_side(struct_to_dict(config.attributes))
         return [], []
 
-    def reconfigure(
-        self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ):
+    def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
         self._apply_side(_require_side(struct_to_dict(config.attributes)))
 
 
@@ -191,26 +138,20 @@ class OpenGripper(_GripperBase, EasyResource):
         self.send_id = model.SEND_IDS[model.ARM_JOINTS]
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         gripper = cls(config.name)
         gripper.reconfigure(config, dependencies)
         return gripper
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> tuple[Sequence[str], Sequence[str]]:
         attributes = _hardware_attributes(struct_to_dict(config.attributes))
         arm_name = attributes.get("arm")
         if isinstance(arm_name, str) and arm_name:
             return [arm_name], []
         return [], []
 
-    def reconfigure(
-        self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ):
+    def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
         self.close_hardware()
         attributes = _hardware_attributes(struct_to_dict(config.attributes))
         self._apply_side(attributes["side"])
@@ -226,28 +167,17 @@ class OpenGripper(_GripperBase, EasyResource):
                 torque_pu=model.GRIPPER_POS_TORQUE,
             )
         )
-        self.logger.info(
-            "OpenArm gripper %s using %s side %s", self.name, self.interface, self.side
-        )
+        self.logger.info("OpenArm gripper %s using %s side %s", self.name, self.interface, self.side)
 
     async def get_current_inputs(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
+        self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ) -> list[float]:
         self._read_feedback()
         return await super().get_current_inputs(extra=extra, timeout=timeout, **kwargs)
 
     @run_with_operation
     async def go_to_inputs(
-        self,
-        values: list[float],
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
+        self, values: list[float], *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs
     ):
         if not values:
             raise ValueError("gripper expects one input, 0 closed and 1 open")
@@ -267,22 +197,12 @@ class OpenGripper(_GripperBase, EasyResource):
             if not self.motion.moving:
                 return
             self.open_amount = commanded[0]
-            session.set_posforce_target(
-                self.send_id, model.gripper_motor(self.side, self.open_amount)
-            )
+            session.set_posforce_target(self.send_id, model.gripper_motor(self.side, self.open_amount))
 
-        await self.motion.run(
-            [self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation
-        )
+        await self.motion.run([self.open_amount], [goal], [model.GRIPPER_SPEED], update, operation)
         self._read_feedback()
 
-    async def stop(
-        self,
-        *,
-        extra: dict[str, Any] | None = None,
-        timeout: float | None = None,
-        **kwargs,
-    ):
+    async def stop(self, *, extra: dict[str, Any] | None = None, timeout: float | None = None, **kwargs):
         await super().stop(extra=extra, timeout=timeout, **kwargs)
         if self.session is not None:
             self.session.hold([self.send_id])

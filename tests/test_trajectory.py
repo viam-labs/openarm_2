@@ -29,8 +29,6 @@ def test_stream_joints_respects_peak_speed_with_easing():
         assert samples[0][0] == pytest.approx(ease_alpha(1 / len(samples)) * 0.4)
         assert samples[-1][0] == pytest.approx(0.4)
         # Peak rate ~0.4 rad/s; ease stretches duration by pi/2.
-        assert len(samples) == pytest.approx(
-            int(round((math.pi / 2) * 0.4 / 0.4 / 0.01)), abs=1
-        )
+        assert len(samples) == pytest.approx(int(round((math.pi / 2) * 0.4 / 0.4 / 0.01)), abs=1)
 
     asyncio.run(run())
